@@ -1,0 +1,82 @@
+# =============================================================================
+# LiteLLM Proxy — LLM ゲートウェイ / 統制レイヤー
+#   全エージェントの LLM 呼び出しをここに集約し、
+#     - 仮想APIキー / チーム / 予算 / RPM・TPM 制限 / モデルアクセス制御
+#     - MCP ゲートウェイ (どのキーがどの MCP サーバ/ツールに到達できるか)
+#     - ガードレール
+#     - Langfuse への自動ロギング
+#   を一元的に効かせる。
+#
+#   起動: docker compose -f compose.litellm.yaml --env-file .env -p aiop-litellm up -d
+# =============================================================================
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: always
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      # 管理 / DB
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      # 管理 UI ( http://localhost:4000/ui ) ログイン
+      UI_USERNAME: ${LITELLM_UI_USERNAME}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD}
+      # プロバイダ資格情報
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
+      # Langfuse コールバック認証 (キーは .env の単一ソースを再利用)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse-web:3000
+    extra_hosts:
+      # Linux で host.docker.internal を解決可能に (Docker Desktop では不要だが無害)
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    networks:
+      - litellm-internal
+      - aiop
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://localhost:4000/health/liveliness'')"'
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # LiteLLM の状態 (仮想キー/予算/チーム/MCP権限/スペンドログ) を保持する Postgres。
+  # DB-backed 機能と管理 UI に必須。内部のみ (ポート非公開)。
+  litellm-db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD}
+    volumes:
+      - litellm-pgdata:/var/lib/postgresql/data
+    networks:
+      - litellm-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  litellm-pgdata:
+
+networks:
+  litellm-internal:
+  aiop:
+    name: aiop
+    external: true

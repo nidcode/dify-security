@@ -1,0 +1,9 @@
+# シークレット
+.env
+*.bak
+
+# Dify は bootstrap で取得する vendored ディレクトリ (リポジトリには含めない)
+dify/docker/
+
+# OS
+.DS_Store

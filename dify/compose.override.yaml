@@ -1,0 +1,44 @@
+# =============================================================================
+# Dify 用 override — `make bootstrap` が dify/docker/docker-compose.override.yaml
+# として配置する。Compose は同ディレクトリの docker-compose.yaml と自動マージする。
+#
+# 目的: Dify から LiteLLM / Langfuse をサービス名で到達可能にするため、
+#       外向き通信を行うサービスを共有 external network "aiop" に接続する。
+#       (各サービスの元ネットワーク ssrf_proxy_network/default を保持したまま追加)
+#
+# これにより Dify 管理画面で:
+#   - モデルプロバイダ "OpenAI-API-compatible" の API Base = http://litellm:4000/v1
+#   - アプリ Tracing の Langfuse Host         = http://langfuse-web:3000
+# が解決できる。
+# =============================================================================
+services:
+  api:
+    networks:
+      - default
+      - ssrf_proxy_network
+      - aiop
+  api_websocket:
+    networks:
+      - default
+      - ssrf_proxy_network
+      - aiop
+  worker:
+    networks:
+      - default
+      - ssrf_proxy_network
+      - aiop
+  worker_beat:
+    networks:
+      - default
+      - ssrf_proxy_network
+      - aiop
+  plugin_daemon:
+    networks:
+      - default
+      - ssrf_proxy_network
+      - aiop
+
+networks:
+  aiop:
+    name: aiop
+    external: true

@@ -1,0 +1,106 @@
+# =============================================================================
+# LiteLLM Proxy 設定
+#   docs: https://docs.litellm.ai/docs/proxy/configs
+#
+# モデルIDは 2026-06 時点の Anthropic 現行モデル。Ollama はローカル。
+# api_key/api_base は os.environ/ 経由でコンテナ環境変数から注入 (.env が単一ソース)。
+# =============================================================================
+
+model_list:
+  # ---- Anthropic Claude (現行) ----
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---- ローカル Ollama (例: llama3.1)。`ollama pull llama3.1` 済み前提 ----
+  - model_name: local-llama
+    litellm_params:
+      model: ollama_chat/llama3.1
+      api_base: os.environ/OLLAMA_API_BASE
+
+# =============================================================================
+# 全リクエスト/レスポンスを Langfuse に自動ロギング (監査・ロギングの中核)
+# =============================================================================
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  drop_params: true          # プロバイダ非対応パラメータを落とす
+  num_retries: 3
+  request_timeout: 600
+  # --- プライバシー/監査のトレードオフ調整 (必要に応じて有効化) ---
+  # turn_off_message_logging: true     # プロンプト/応答本文を伏せ、メタ/コストのみ記録
+  # redact_user_api_key_info: true     # ログからキー情報を伏せる
+
+# =============================================================================
+# 一般設定: マスターキー / DB / モデルのDB永続化
+# =============================================================================
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  # 仮想キー発行時の上限ガード (統制)。発行APIでこの上限を超える指定を拒否。
+  upperbound_key_generate_params:
+    max_budget: 100        # USD
+    duration: "30d"
+
+# =============================================================================
+# ルーティング
+# =============================================================================
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+
+# =============================================================================
+# MCP ゲートウェイ (MCP 統制)
+#   LiteLLM が単一エンドポイント http://<proxy>:4000/mcp を公開し、
+#   仮想キーの object_permission で「どのキーがどの MCP サーバ/ツールに到達できるか」
+#   を制御する。以下は雛形 — 実際の MCP サーバ URL/認証に置き換える。
+#
+#   クライアント接続例:
+#     URL:    http://localhost:4000/mcp
+#     Header: Authorization: Bearer <virtual-key>
+#             x-mcp-servers: <server-alias or access-group>   (接続を絞る場合)
+#
+#   キーへの権限付与例 (master key で実行):
+#     curl -X POST http://localhost:4000/key/generate \
+#       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+#       -H "Content-Type: application/json" \
+#       -d '{
+#             "models": ["claude-sonnet-4-6","local-llama"],
+#             "max_budget": 10, "budget_duration": "30d",
+#             "rpm_limit": 60,
+#             "object_permission": {
+#               "mcp_servers": ["example_http_mcp"],
+#               "mcp_access_groups": ["dev_group"],
+#               "mcp_tool_permissions": {"example_http_mcp": ["search","fetch"]}
+#             }
+#           }'
+# =============================================================================
+mcp_servers:
+  example_http_mcp:
+    url: https://mcp.example.com/mcp     # ← 実サーバURLに置換
+    transport: "http"                    # http(streamable) | sse | stdio
+    auth_type: "none"                    # none | api_key | bearer_token | oauth2 | aws_sigv4
+    # auth_value: os.environ/EXAMPLE_MCP_TOKEN
+    access_groups: ["dev_group"]
+    description: "サンプル MCP サーバ (要置換)"
+
+# =============================================================================
+# ガードレール (任意。PII マスキング等)。利用には対応プロバイダの設定が必要。
+#   docs: https://docs.litellm.ai/docs/proxy/guardrails/quick_start
+# =============================================================================
+# guardrails:
+#   - guardrail_name: pii-mask
+#     litellm_params:
+#       guardrail: presidio
+#       mode: pre_call
+#       default_on: true
