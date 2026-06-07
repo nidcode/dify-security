@@ -27,6 +27,17 @@ model_list:
       model: ollama_chat/llama3.1
       api_base: os.environ/OLLAMA_API_BASE
 
+  # ---- Google Vertex AI Embedding (ADC認証 / APIキー不要) ----
+  #   ※ text-embedding-004 は 2026-01-14 廃止 → 現行GAの gemini-embedding-001 を使用
+  #   認証は ADC: compose で ~/.config/gcloud をマウントし
+  #   GOOGLE_APPLICATION_CREDENTIALS=application_default_credentials.json を参照
+  #   既定の出力次元は 3072。縮小したい場合は litellm_params に `dimensions: 1536` を追加 (要正規化)
+  - model_name: gemini-embedding
+    litellm_params:
+      model: vertex_ai/gemini-embedding-001
+      vertex_project: os.environ/VERTEX_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+
 # =============================================================================
 # 全リクエスト/レスポンスを Langfuse に自動ロギング (監査・ロギングの中核)
 # =============================================================================

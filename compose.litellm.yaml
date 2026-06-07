@@ -17,6 +17,8 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+      # ADC (gcloud Application Default Credentials) をマウント (読み取り専用)
+      - ${HOME}/.config/gcloud:/gcloud:ro
     ports:
       - "${LITELLM_PORT:-4000}:4000"
     environment:
@@ -30,6 +32,10 @@ services:
       UI_PASSWORD: ${LITELLM_UI_PASSWORD}
       # プロバイダ資格情報
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # --- Vertex AI (Gemini埋め込み) を ADC で利用 (APIキー不要) ---
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/application_default_credentials.json
+      VERTEX_PROJECT: ${VERTEX_PROJECT}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-us-central1}
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
       # Langfuse コールバック認証 (キーは .env の単一ソースを再利用)
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}

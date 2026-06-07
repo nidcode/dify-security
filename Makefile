@@ -10,7 +10,7 @@ DIFY_DIR := dify/docker
 
 .DEFAULT_GOAL := help
 .PHONY: help bootstrap gen-env gen-env-force net up up-langfuse up-litellm up-dify \
-        down down-dify ps logs logs-dify urls pull clean
+        down down-dify ps logs logs-dify urls pull embed-test clean
 
 help: ## このヘルプを表示
 	@echo "AIOP — Dify + LiteLLM + Langfuse"
@@ -74,6 +74,13 @@ pull: ## 全イメージを最新に pull
 	-$(LANGFUSE) pull
 	-$(LITELLM) pull
 	-cd $(DIFY_DIR) && docker compose -p dify pull
+
+embed-test: ## gemini-embedding を実呼び出しして次元数を確認 (Vertex/ADC)
+	@set -a; . ./.env; set +a; \
+	curl -s -X POST http://localhost:4000/v1/embeddings \
+	  -H "Authorization: Bearer $$LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+	  -d '{"model":"gemini-embedding","input":"embedding test"}' \
+	  | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ OK / 次元数:', len(d['data'][0]['embedding'])) if 'data' in d else print('❌', d)"
 
 urls: ## アクセスURL一覧
 	@echo "┌─────────────────────────────────────────────────────────────┐"

@@ -38,6 +38,14 @@ services:
       - ssrf_proxy_network
       - aiop
 
+  # 起動タイミング問題の対策: web は api が healthy になってから起動させる。
+  # (これがないと web が api/DB 準備前にリクエストを受け、初回アクセスで
+  #  一時的に "Internal Server Error" になることがある)
+  web:
+    depends_on:
+      api:
+        condition: service_healthy
+
 networks:
   aiop:
     name: aiop
