@@ -137,6 +137,83 @@ A2A の Agent Card は不要。**ただのメタデータ目録**でよい。
 
 ---
 
+## 10. クラウド版(AWS / Azure)とコスト構造
+
+OSS 自己ホストの代わりに、AWS / Azure のマネージドで台帳+ガバナンスを組むこともできる。
+両クラウドとも本質は同じ型(**コントロールプレーン=台帳/承認 + データプレーン=ゲートウェイ強制 + ID + 可観測性**)で、
+**台帳は強制しない / 強制はゲートウェイ**という関係も共通。違いは「単一製品か、サービスの束か」と「Copilot をネイティブに飲めるか」、そして**課金モデル**。
+
+### 10.1 AWS 構成 — Amazon Bedrock AgentCore
+
+```
+[Dify / LangGraph / Copilot / 自作]
+  ├─ 登録(A2A Card/MCP/URL発見)→ AWS Agent Registry ★Preview  … 台帳/承認/監査(CloudTrail/EventBridge)
+  ├─ ツール呼び出し ───────────→ AgentCore Gateway (GA)        … 強制(Cedar+Lambda interceptor)←関所
+  ├─ 認証 ────────────────────→ AgentCore Identity (GA)       … エージェントID/トークン保管
+  └─ LLM ─────────────────────→ LiteLLM(維持)→ Bedrock/Anthropic/Vertex
+  観測: AgentCore→CloudWatch/X-Ray、LiteLLM→Langfuse(維持)
+```
+- 台帳=Agent Registry(**Preview**)。他クラウド/オンプレ製も登録可。カタログであり実行は止めない。
+- 強制=AgentCore Gateway(**GA**)。「承認済みのみ実行」の関所。
+- **LiteLLM / Langfuse はそのまま残せる**(AgentCore は LLMルーティングGWを持たない)。
+
+### 10.2 Azure 構成 — 単一製品でなくサービスの束
+
+```
+[Dify / LangGraph / Copilot / 自作]
+  ├─ ID ───────→ Microsoft Entra Agent ID (GA)     … 各エージェントにEntra ID + Conditional Access
+  ├─ 台帳 ─────→ Microsoft Agent 365 (GA)          … 全エージェント在庫(旧Entra Agent Registryは2026/5/1廃止→後継)
+  │              + Foundry Control Plane            … 外部エージェント "Register asset"(HTTP/A2A)
+  ├─ 関所 ─────→ Azure API Management AI Gateway(GA)… トークン制限/OAuth/Block ←関所
+  ├─ データ統制→ Microsoft Purview (DSPM for AI/監査/DLP)
+  └─ LLM ──────→ APIMの背後に LiteLLM(維持)→ providers
+  観測: App Insights + Langfuse(維持) / Copilotは Power Platform管理→Agent365・Purviewへ自動federate
+```
+- 台帳=**Agent 365(GA)**。外部実行物は Foundry Control Plane で登録(APIM プロキシ+新URL+Block/Unblock、公式例は LangGraph)。
+- **Copilot がネイティブ**(Power Platform→Entra Agent ID→Agent 365/Purview)。
+- ⚠️ 旧 Entra Agent Registry(preview)は **2026/5/1 廃止**。台帳は Agent 365 前提。Foundry Hosted agents 等は一部 preview。
+
+### 10.3 AWS vs Azure(機能)
+
+| 観点 | AWS (AgentCore) | Azure(束) |
+|---|---|---|
+| 台帳 | Agent Registry ★Preview | Agent 365(GA)+ Foundry Control Plane |
+| 強制(関所) | AgentCore Gateway / Cedar(GA) | APIM AI Gateway(GA) |
+| エージェントID | AgentCore Identity(GA) | Entra Agent ID(GA) |
+| **Copilot 統合** | △ 外部扱い(メタ登録) | **◎ ネイティブ** |
+| LiteLLM 併存 | ◎ | ◎(APIM背後) |
+| Langfuse 併存 | ◎ | ◎(App Insights併用) |
+| ロックイン | 中(AWS) | 高(M365/Entra) |
+
+### 10.4 コスト構造の比較(ここが選択の決め手)
+
+> モデル利用料(Anthropic/Vertex/Bedrock のトークン課金)はどの方式でもほぼ同じ。**差が出るのは“ガバナンス層”の課金モデル**。
+
+| | **OSS 自己ホスト(現行)** | **AWS AgentCore** | **Azure Agent 365** |
+|---|---|---|---|
+| ライセンス費 | **$0**(Apache/MIT) | $0(従量のみ) | **per-user 課金** |
+| 課金モデル | インフラ費 + 運用工数 | **従量(使用量)**: Runtime $0.0895/vCPU時・$0.00945/GB時、Gateway=ツール呼び出し単位、Identity/Memory/Policy=各使用単位 | **per-seat(人数)**: Agent365 **$15/user/月**(or M365 E7 **$99/user/月** に同梱)+ ガバナンスに Entra **P1/P2** |
+| スケール軸 | **インフラ規模** | **使用量(エージェント稼働)** | **ユーザー数(席)** |
+| 前提条件 | サーバ用意のみ | AWSアカウント | **実質 M365 E5 が前提**(重い) |
+| 運用負荷 | 高(自前運用) | 中(マネージド) | 中〜低(M365管理に統合) |
+| ロックイン | 低 | 中 | 高 |
+
+**要点:**
+- **OSS = 固定費(インフラ+人件費)。台数・人数に依存しない**。最小コストだが運用は自前。
+- **AWS = 使った分だけ(エージェントの稼働量に比例)。席課金なし**。AWS/Bedrock 中心や実行基盤ごと寄せたい場合に向く。
+- **Azure = 人数(席)に比例 + M365 E5 前提**。大人数ほど高額、かつ Microsoft エコシステムへのロックインが強い。Copilot/M365 を全社導入済みなら自然。
+
+### 10.5 選択ガイド
+
+- **コスト最小・自己ホスト一貫** → **OSS**(現行の Dify+LiteLLM+Langfuse、必要なら Nacos)
+- **エージェント稼働量で課金したい / AWS 中心** → **AWS AgentCore**(LiteLLM/Langfuse は併存)
+- **全社 M365 E5 + Copilot 前提 / 人事的ガバナンス(sponsor・ライフサイクル)重視** → **Azure Agent 365**(ただし席課金が重い)
+- 共通の限界: **Dify のワークスペース共有キー問題はクラウドでも解消しない**(登録レベルのガバナンスは付与可)。
+
+> 注意: クラウドのライセンス/価格は GA 直後で改定中。実購入前に各社へ最終確認を推奨。
+
+---
+
 ## 参考リンク
 
 - LiteLLM 仮想キー: https://docs.litellm.ai/docs/proxy/virtual_keys
@@ -146,3 +223,11 @@ A2A の Agent Card は不要。**ただのメタデータ目録**でよい。
 - AWS Agent Registry: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/registry.html
 - Nacos Agent Registry: https://nacos.io/en/docs/latest/manual/user/ai/agent-registry/
 - AGNTCY dir: https://github.com/agntcy/dir
+- AWS Agent Registry: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/registry.html
+- AgentCore Gateway interceptors(強制): https://aws.amazon.com/blogs/machine-learning/secure-ai-agents-with-policy-and-lambda-interceptors-in-amazon-bedrock-agentcore-gateway/
+- AgentCore 料金: https://aws.amazon.com/bedrock/agentcore/pricing/
+- Microsoft Entra Agent ID: https://learn.microsoft.com/en-us/entra/agent-id/what-is-microsoft-entra-agent-id
+- Entra Agent Registry→Agent 365 移行: https://learn.microsoft.com/en-us/entra/agent-id/agent-registry-convergence
+- APIM GenAI Gateway: https://learn.microsoft.com/en-us/azure/api-management/genai-gateway-capabilities
+- Agent 365 概要/ライセンス: https://learn.microsoft.com/en-us/microsoft-agent-365/overview
+- Conditional Access for Agents(P1/P2+Agent365要件): https://learn.microsoft.com/en-us/entra/identity/conditional-access/agent-id
