@@ -39,11 +39,11 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
 
 # =============================================================================
-# 全リクエスト/レスポンスを Langfuse に自動ロギング (監査・ロギングの中核)
+# 一般の LLM 呼び出し設定
+#   ロギング先が必要になったら success_callback/failure_callback を追加する
+#   (例: ["langfuse"] や ["otel"] 等)。現状は外部ロギング無効。
 # =============================================================================
 litellm_settings:
-  success_callback: ["langfuse"]
-  failure_callback: ["langfuse"]
   drop_params: true          # プロバイダ非対応パラメータを落とす
   num_retries: 3
   request_timeout: 600

@@ -2,8 +2,18 @@
 .env
 *.bak
 
-# Dify は bootstrap で取得する vendored ディレクトリ (リポジトリには含めない)
-dify/docker/
+# Dify テンプレート本体 (dify/docker/) は追跡する。ただし:
+#   - *.env はシークレット (dify/docker/.gitignore が *.env を除外・*.env.example は残す)
+#   - 実行時データはテンプレでは生成されない設計だが、念のため既知の runtime dir を除外
+dify/docker/.env
+dify/docker/volumes/app/storage/
+dify/docker/volumes/db/data/
+dify/docker/volumes/redis/data/
+dify/docker/volumes/weaviate/
+dify/docker/volumes/plugin_daemon/
+
+# Dify インスタンス = 公式 docker/ の複製 (.env / volumes データを含む生成物)
+dify/instances/
 
 # OS
 .DS_Store

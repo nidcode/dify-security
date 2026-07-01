@@ -4,8 +4,14 @@
 #     - 仮想APIキー / チーム / 予算 / RPM・TPM 制限 / モデルアクセス制御
 #     - MCP ゲートウェイ (どのキーがどの MCP サーバ/ツールに到達できるか)
 #     - ガードレール
-#     - Langfuse への自動ロギング
 #   を一元的に効かせる。
+#
+#   ネットワーク方針 (セキュリティ):
+#     - ホストの ${LITELLM_HOST:-172.17.0.1}:4000 (docker bridge gateway) にのみ公開。
+#       ホスト内部からのみ到達でき LAN には晒さない。
+#     - Dify 各インスタンスは共有 docker ネットワークではなく
+#       host-gateway (host.docker.internal:4000) 経由で到達する
+#       → Dify インスタンス間に共有 L3 平面が無く、相互到達不可
 #
 #   起動: docker compose -f compose.litellm.yaml --env-file .env -p aiop-litellm up -d
 # =============================================================================
@@ -20,7 +26,10 @@ services:
       # ADC (gcloud Application Default Credentials) をマウント (読み取り専用)
       - ${HOME}/.config/gcloud:/gcloud:ro
     ports:
-      - "${LITELLM_PORT:-4000}:4000"
+      # docker bridge gateway (既定 172.17.0.1) にのみ公開。
+      # Dify コンテナは host.docker.internal(=このIP) 経由で到達。LAN には露出しない。
+      # Docker Desktop/WSL2 の場合は .env で LITELLM_HOST=127.0.0.1 でも可。
+      - "${LITELLM_HOST:-172.17.0.1}:${LITELLM_PORT:-4000}:4000"
     environment:
       # 管理 / DB
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
@@ -37,10 +46,6 @@ services:
       VERTEX_PROJECT: ${VERTEX_PROJECT}
       VERTEX_LOCATION: ${VERTEX_LOCATION:-us-central1}
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
-      # Langfuse コールバック認証 (キーは .env の単一ソースを再利用)
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
-      LANGFUSE_HOST: http://langfuse-web:3000
     extra_hosts:
       # Linux で host.docker.internal を解決可能に (Docker Desktop では不要だが無害)
       - "host.docker.internal:host-gateway"
@@ -49,7 +54,6 @@ services:
         condition: service_healthy
     networks:
       - litellm-internal
-      - aiop
     healthcheck:
       test:
         - CMD-SHELL
@@ -82,7 +86,5 @@ volumes:
   litellm-pgdata:
 
 networks:
+  # LiteLLM とその DB だけが載る内部網。外部・Dify からは到達しない。
   litellm-internal:
-  aiop:
-    name: aiop
-    external: true

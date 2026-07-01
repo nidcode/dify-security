@@ -26,10 +26,7 @@ set_kv() {
   fi
 }
 
-b64()  { openssl rand -base64 32 | tr -d '\n'; }            # NEXTAUTH_SECRET / SALT
-hex()  { openssl rand -hex 32 | tr -d '\n'; }               # ENCRYPTION_KEY (64 hex = 256bit)
-hexn() { openssl rand -hex "${1:-16}" | tr -d '\n'; }       # 汎用パスワード
-uuid() { if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'; else openssl rand -hex 16; fi; }
+hexn() { openssl rand -hex "${1:-16}" | tr -d '\n'; }       # 汎用パスワード/キー
 
 # --- LiteLLM ---
 set_kv LITELLM_MASTER_KEY  "sk-$(hexn 24)"
@@ -37,19 +34,8 @@ set_kv LITELLM_SALT_KEY    "$(hexn 24)"
 set_kv LITELLM_UI_PASSWORD "$(hexn 12)"
 set_kv LITELLM_DB_PASSWORD "$(hexn 16)"
 
-# --- Langfuse: 事前プロビジョンするプロジェクトキー (LiteLLM/Dify が共用) ---
-set_kv LANGFUSE_INIT_PROJECT_PUBLIC_KEY "pk-lf-$(uuid)"
-set_kv LANGFUSE_INIT_PROJECT_SECRET_KEY "sk-lf-$(uuid)"
-set_kv LANGFUSE_INIT_USER_PASSWORD      "$(hexn 12)"
+# .env は機密 (マスターキー/DBパスワード等) → 権限を絞る
+chmod 600 .env
 
-# --- Langfuse 内部シークレット ---
-set_kv LANGFUSE_NEXTAUTH_SECRET     "$(b64)"
-set_kv LANGFUSE_SALT                "$(b64)"
-set_kv LANGFUSE_ENCRYPTION_KEY      "$(hex)"
-set_kv LANGFUSE_POSTGRES_PASSWORD   "$(hexn 16)"
-set_kv LANGFUSE_CLICKHOUSE_PASSWORD "$(hexn 16)"
-set_kv LANGFUSE_REDIS_AUTH          "$(hexn 16)"
-set_kv LANGFUSE_MINIO_ROOT_PASSWORD "$(hexn 16)"
-
-echo "✅ .env を生成しました (シークレットは自動生成済み)。"
+echo "✅ .env を生成しました (シークレットは自動生成済み / chmod 600)。"
 echo "⚠️  必須: .env の ANTHROPIC_API_KEY を実際のキーに書き換えてください。"

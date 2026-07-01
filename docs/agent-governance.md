@@ -2,7 +2,8 @@
 
 社内のエージェント乱立(agent sprawl)に対する統制方針をまとめる。
 対象基盤: **Dify / LangGraph / Copilot(Microsoft)** などの混在環境。
-既存スタック: **LiteLLM(ゲートウェイ)+ Langfuse(可観測性)+ Anthropic / Vertex(ADC)**。
+既存スタック: **LiteLLM(ゲートウェイ)+ Anthropic / Vertex(ADC)**。
+可観測性(Langfuse 等)は本リポジトリでは無効化しており、必要時に別途追加する。
 
 ---
 
@@ -33,7 +34,7 @@
    │   LiteLLM Gateway = 関所(登録キーのみ/予算/制限)  │  ← Anthropic/Vertex の実キーはここだけが保持
    └───────┬──────────────────────────┬──────────────┘
            ▼                          ▼
-     Anthropic / Vertex(ADC)     Langfuse(監査・per-agentトレース)
+     Anthropic / Vertex(ADC)     (任意) Langfuse等 監査・per-agentトレース
 
    ┌──────────────────────────────────────────────────┐
    │ 横断カタログ(任意): Backstage / Nacos = 社内台帳   │ ← 3基盤+Copilotを1覧に federate
@@ -48,7 +49,7 @@
 |---|---|---|
 | **関所(強制)** | 登録済みしか LLM を呼べない・予算・モデル制限 | **LiteLLM 仮想キー** |
 | **台帳(在庫)** | 何があるか・誰の所有・状態 | LiteLLM Keys/Teams +(横断なら)Backstage/Nacos |
-| **可観測性** | 個別エージェントの挙動・コスト | **Langfuse** |
+| **可観測性** | 個別エージェントの挙動・コスト | LiteLLM のスペンド/使用状況(詳細トレースは Langfuse 等を任意で追加) |
 | **ID** | エージェント=固有資格情報 | 仮想キー(`key_alias`=エージェント名)/ Team |
 
 > 検証済み: LiteLLM は既定で **キー無し・未登録キーを 401 で拒否**(登録キーとマスターキーのみ通過)。
@@ -61,7 +62,7 @@
 | 基盤 | LiteLLM への通し方 | 個別エージェント識別 | 強制「登録のみ」 |
 |---|---|---|---|
 | **LangGraph** | `ChatOpenAI(base_url=<litellm>/v1, api_key=<agent鍵>, model="claude-sonnet-4-6")`。**エージェントごとに別キー** | **◎ 完全に個別**(キー=エージェント) | ◎ キー単位で完全強制 |
-| **Dify** | モデルプロバイダ=OpenAI互換→`http://litellm:4000/v1`。**キーはワークスペース単位** | △ 個別は Langfuse のアプリ単位トレースで補完(LiteLLM では束ねられる) | ○ ワークスペース単位(個別不可)。分けたいなら**ワークスペース分割** |
+| **Dify** | モデルプロバイダ=OpenAI互換→`http://host.docker.internal:4000/v1`。**キーはワークスペース単位** | ○ **インスタンス別キー**で分離(1インスタンス=1デプロイ=1キー) | ◎ インスタンス分割が既定(マルチインスタンス構成) |
 | **Copilot (Studio)** | **コアの LLM 呼び出しは外部GWに通せない**(MS が管理) | ✗ LiteLLM では見えない | **MS 側で統制**(Power Platform 管理 / 環境 / DLP / Purview)。あなたの**ツール/MCP/API を呼ぶ部分だけ** LiteLLM(MCP/API ゲートウェイ)で統制 |
 
 **要点**: LangGraph が最も統制しやすく(個別キー)、Dify はワークスペース粒度、Copilot は別プレーン(Microsoft)。
@@ -106,8 +107,8 @@ A2A の Agent Card は不要。**ただのメタデータ目録**でよい。
 ## 7. 運用ルール(最低限これだけ)
 
 - プロバイダ実キーは **LiteLLM に集約**(直接配布禁止)。**マスターキーは管理専用**(エージェントには配らない)。
-- **エージェント=1キー**(LangGraph)。Dify は重要なものは**ワークスペース分割**、それ以外は Langfuse アプリ単位で可視化。
-- **全部 Langfuse に送る**(LiteLLM の `success/failure_callback` + Dify の per-app tracing)。
+- **エージェント=1キー**(LangGraph)。Dify は**インスタンス別キー**で分離(1インスタンス=1デプロイ=1キー)。
+- 可観測性が必要なら **LiteLLM の `success/failure_callback`** に Langfuse 等を追加(現状は無効)。
 - Copilot は **MS 管理プレーンで統制 + メタデータだけ横断台帳に登録**。
 - 仮想キーは **エージェント単位で発行/失効**。漏洩時は該当キーのみ失効。
 
@@ -117,8 +118,8 @@ A2A の Agent Card は不要。**ただのメタデータ目録**でよい。
 
 | 必要なもの | 状態 |
 |---|---|
-| 関所(LiteLLM) | ✅ 稼働中(登録キーのみ・予算・モデル制限・Langfuse連携) |
-| 可観測性(Langfuse) | ✅ 稼働中(自己ホスト・外部送信なし) |
+| 関所(LiteLLM) | ✅ 稼働中(登録キーのみ・予算・モデル制限) |
+| 可観測性 | ⬜ 未導入(LiteLLM のスペンド表示のみ。詳細トレースは Langfuse 等を任意で追加) |
 | プロバイダ集約(Anthropic/Vertex ADC) | ✅ LiteLLM のみが実キー/ADC を保持 |
 | 横断カタログ(Backstage/Nacos) | ⬜ 任意。複数基盤を1台帳にしたい場合に追加 |
 | Copilot 統制(MS プレーン) | ⬜ 利用時に Power Platform 管理/Purview で対応 |

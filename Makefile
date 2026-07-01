@@ -1,27 +1,32 @@
 # =============================================================================
-# AIOP — Dify + LiteLLM + Langfuse スタック オーケストレーション
+# AIOP — Dify + LiteLLM スタック オーケストレーション
 #
-#   起動順序: 共有ネットワーク → Langfuse → LiteLLM → Dify
+#   中央 (1個): LiteLLM (+専用Postgres)   → make で管理
+#   Dify      : dify/instances/<name>/ (公式 docker/ の複製) を素の docker compose で操作
+#
+#   ネットワーク: Dify は共有網に載せず host-gateway (host.docker.internal:4000)
+#                 経由で LiteLLM に到達する。→ Dify インスタンス間は相互に到達不可。
 # =============================================================================
 
-LANGFUSE := docker compose -p aiop-langfuse --env-file .env -f compose.langfuse.yaml
-LITELLM  := docker compose -p aiop-litellm  --env-file .env -f compose.litellm.yaml
-DIFY_DIR := dify/docker
+LITELLM := docker compose -p aiop-litellm --env-file .env -f compose.litellm.yaml
+
+# Dify インスタンス一覧 = dify/instances/<name>/ (表示にのみ使用)
+INSTANCES := $(notdir $(wildcard dify/instances/*))
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap gen-env gen-env-force net up up-langfuse up-litellm up-dify \
-        down down-dify ps logs logs-dify urls pull embed-test clean
+.PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test
 
 help: ## このヘルプを表示
-	@echo "AIOP — Dify + LiteLLM + Langfuse"
+	@echo "AIOP — Dify + LiteLLM"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "クイックスタート: make bootstrap  →  .envのANTHROPIC_API_KEY設定  →  make up  →  make urls"
+	@echo "Dify の起動/停止は各フォルダで素の docker compose:"
+	@echo "  cd dify/instances/<name> && docker compose up -d   /   down   /   logs -f"
 
 # --- セットアップ ---------------------------------------------------------
-bootstrap: ## 初期セットアップ (.env生成 / ネットワーク / Dify取得)
+bootstrap: ## 初期セットアップ (.env生成 / Dify取得)
 	@bash scripts/bootstrap.sh
 
 gen-env: ## .env を生成 (既存ならスキップ)
@@ -30,50 +35,37 @@ gen-env: ## .env を生成 (既存ならスキップ)
 gen-env-force: ## .env を強制再生成 (シークレットが変わる点に注意)
 	@bash scripts/gen-env.sh --force
 
-net: ## 共有ネットワーク aiop を作成
-	@docker network inspect aiop >/dev/null 2>&1 || docker network create aiop
+# --- Dify インスタンス作成 (以後は素の docker compose で操作) --------------
+dify-new: ## Dify インスタンスを新規作成 (make dify-new NAME=teamA PORT=8081)
+	@test -n "$(NAME)" -a -n "$(PORT)" || { echo "❌ NAME= と PORT= を指定 (例: make dify-new NAME=teamA PORT=8081)"; exit 1; }
+	@bash scripts/dify-new.sh $(NAME) $(PORT)
 
-# --- 起動 -----------------------------------------------------------------
-up: net up-langfuse up-litellm up-dify ## 全スタックを順に起動
-	@echo "✅ 全スタック起動。'make urls' でアクセス先を確認。"
-
-up-langfuse: net ## Langfuse のみ起動
-	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
-	$(LANGFUSE) up -d
-
-up-litellm: net ## LiteLLM のみ起動
+# --- 中央スタック (LiteLLM) -----------------------------------------------
+up: ## LiteLLM を起動
 	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
 	$(LITELLM) up -d
+	@echo "✅ LiteLLM 起動。Dify は 'cd dify/instances/<name> && docker compose up -d'"
 
-up-dify: net ## Dify のみ起動
-	@test -f $(DIFY_DIR)/docker-compose.yaml || { echo "❌ Dify 未取得。'make bootstrap' を実行"; exit 1; }
-	cd $(DIFY_DIR) && docker compose -p dify up -d
-
-# --- 停止 -----------------------------------------------------------------
-down: down-dify ## 全スタックを停止
+down: ## LiteLLM を停止 (Dify は各フォルダで docker compose down)
 	-$(LITELLM) down
-	-$(LANGFUSE) down
-	@echo "✅ 停止しました (データは保持)。"
+	@echo "✅ LiteLLM 停止 (データは保持)。"
 
-down-dify:
-	@test -f $(DIFY_DIR)/docker-compose.yaml && (cd $(DIFY_DIR) && docker compose -p dify down) || true
+ps: ## LiteLLM の状態
+	@$(LITELLM) ps
 
-# --- 運用 -----------------------------------------------------------------
-ps: ## 全コンテナの状態
-	@echo "── Langfuse ──"; $(LANGFUSE) ps
-	@echo "── LiteLLM ──";  $(LITELLM) ps
-	@echo "── Dify ──"; test -f $(DIFY_DIR)/docker-compose.yaml && (cd $(DIFY_DIR) && docker compose -p dify ps) || true
+logs: ## LiteLLM のログを追従
+	$(LITELLM) logs -f --tail=100
 
-logs: ## Langfuse + LiteLLM のログを追従
-	$(LANGFUSE) logs -f --tail=100 & $(LITELLM) logs -f --tail=100 & wait
-
-logs-dify: ## Dify のログを追従
-	cd $(DIFY_DIR) && docker compose -p dify logs -f --tail=100
-
-pull: ## 全イメージを最新に pull
-	-$(LANGFUSE) pull
+pull: ## LiteLLM のイメージを最新に pull
 	-$(LITELLM) pull
-	-cd $(DIFY_DIR) && docker compose -p dify pull
+
+urls: ## アクセスURL一覧
+	@echo "LiteLLM 管理UI : http://localhost:4000/ui   (bind ${LITELLM_HOST:-172.17.0.1} / LAN非公開)"
+	@echo "LiteLLM API    : http://localhost:4000/v1"
+	@echo "Dify 各インスタンスの接続先 (共通): http://host.docker.internal:4000/v1"
+	@echo "Dify インスタンス:"
+	@for d in $(INSTANCES); do printf "  - %-12s http://localhost:%s\n" "$$d" "$$(grep -E '^EXPOSE_NGINX_PORT=' dify/instances/$$d/.env | cut -d= -f2)"; done
+	@test -n "$(INSTANCES)" || echo "  (なし) 'make dify-new NAME=teamA PORT=8081' で作成"
 
 embed-test: ## gemini-embedding を実呼び出しして次元数を確認 (Vertex/ADC)
 	@set -a; . ./.env; set +a; \
@@ -81,22 +73,3 @@ embed-test: ## gemini-embedding を実呼び出しして次元数を確認 (Vert
 	  -H "Authorization: Bearer $$LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
 	  -d '{"model":"gemini-embedding","input":"embedding test"}' \
 	  | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ OK / 次元数:', len(d['data'][0]['embedding'])) if 'data' in d else print('❌', d)"
-
-urls: ## アクセスURL一覧
-	@echo "┌─────────────────────────────────────────────────────────────┐"
-	@echo "│ Dify  (エージェント基盤) : http://localhost              (80) │"
-	@echo "│ LiteLLM 管理UI           : http://localhost:4000/ui          │"
-	@echo "│ LiteLLM API (OpenAI互換) : http://localhost:4000/v1          │"
-	@echo "│ Langfuse (監査/ログ)     : http://localhost:3000             │"
-	@echo "│ MinIO  S3 API            : http://localhost:9090             │"
-	@echo "└─────────────────────────────────────────────────────────────┘"
-	@echo "LiteLLM UI / Langfuse のログイン情報は .env を参照。"
-
-clean: ## 【破壊的】全停止 + ボリューム削除 + ネットワーク削除
-	@echo "⚠️  全データ(トレース/DB/モデル設定/キー)を削除します。"
-	@printf "本当に実行しますか? [y/N] " && read ans && [ "$$ans" = "y" ]
-	-cd $(DIFY_DIR) && docker compose -p dify down -v
-	-$(LITELLM) down -v
-	-$(LANGFUSE) down -v
-	-docker network rm aiop
-	@echo "✅ クリーンアップ完了。"

@@ -3,29 +3,21 @@
 # 初期セットアップ:
 #   1. docker / compose の確認
 #   2. .env の生成 (scripts/gen-env.sh)
-#   3. 共有ネットワーク "aiop" の作成
-#   4. Dify 公式 docker/ ディレクトリの取得 + override/.env の配置
+#   3. Dify 公式 docker/ ディレクトリの取得 (= インスタンス複製元のテンプレート)
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DIFY_VERSION="${DIFY_VERSION:-1.14.2}"
 
-echo "==> 1/4 docker / compose を確認"
+echo "==> 1/3 docker / compose を確認"
 command -v docker >/dev/null 2>&1 || { echo "❌ docker が見つかりません"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "❌ docker compose v2 が必要です"; exit 1; }
 
-echo "==> 2/4 .env を生成"
+echo "==> 2/3 .env を生成"
 bash scripts/gen-env.sh
 
-echo "==> 3/4 共有ネットワーク aiop を作成"
-if docker network inspect aiop >/dev/null 2>&1; then
-  echo "  既存の aiop を再利用"
-else
-  docker network create aiop >/dev/null && echo "  aiop を作成"
-fi
-
-echo "==> 4/4 Dify ${DIFY_VERSION} を取得"
+echo "==> 3/3 Dify ${DIFY_VERSION} を取得 (インスタンス複製元のテンプレート)"
 if [[ -f dify/docker/docker-compose.yaml ]]; then
   echo "  dify/docker/ は既に存在。再取得するには: rm -rf dify/docker"
 else
@@ -56,15 +48,17 @@ else
   echo "  Dify を dify/docker/ に配置 (SECRET_KEY 生成済み)"
 fi
 
-# override を (再)配置 — 冪等
+# override をテンプレート側にも配置しておく (複製時にコピーされる) — 冪等
 if [[ -d dify/docker ]]; then
   cp dify/compose.override.yaml dify/docker/docker-compose.override.yaml
-  echo "  docker-compose.override.yaml を配置 (aiop ネットワーク接続)"
+  echo "  docker-compose.override.yaml を配置 (host-gateway 経由で LiteLLM 到達)"
 fi
 
 echo ""
 echo "🎉 bootstrap 完了。"
 echo "   次の手順:"
 echo "     1) .env の ANTHROPIC_API_KEY を実キーに変更"
-echo "     2) make up        # 全スタック起動"
-echo "     3) make urls      # アクセスURLを表示"
+echo "     2) make up                                    # LiteLLM を起動"
+echo "     3) make dify-new NAME=teamA PORT=8081         # Dify を作成 (公式 docker/ を複製)"
+echo "     4) cd dify/instances/teamA && docker compose up -d   # Dify を起動 (素の compose)"
+echo "     5) make urls                                  # アクセスURLを表示"
