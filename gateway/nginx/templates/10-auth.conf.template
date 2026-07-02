@@ -1,0 +1,17 @@
+# Keycloak を auth.<GATEWAY_DOMAIN> で公開 (front-nginx で TLS 終端 → 内部 http)。
+# EntraID へのフェデレーション、ログイン画面、トークン/JWKS 配布はすべてここ経由。
+# 共通プロキシヘッダ (Host/X-Forwarded-*) は nginx.conf の http{} で設定済み。
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name auth.${GATEWAY_DOMAIN};
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+
+    # 変数 + resolver で遅延解決 (keycloak 再起動に強い)。
+    location / {
+        set $kc_upstream keycloak;
+        proxy_pass http://$kc_upstream:8080;
+    }
+}

@@ -15,5 +15,11 @@ dify/docker/volumes/plugin_daemon/
 # Dify インスタンス = 公式 docker/ の複製 (.env / volumes データを含む生成物)
 dify/instances/
 
+# Gateway 生成物・機密
+gateway/certs/*            # TLS 証明書 (wildcard)。.gitkeep のみ残す
+!gateway/certs/.gitkeep
+gateway/oauth2-proxies.gateway.yaml            # oauth2-proxy サービス群 (client secret を含む)
+gateway/nginx/templates/team-*.conf.template   # チーム別 server ブロック (生成物)
+
 # OS
 .DS_Store

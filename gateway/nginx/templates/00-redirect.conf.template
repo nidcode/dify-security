@@ -1,0 +1,6 @@
+# HTTP(80) は全て HTTPS(443) へ恒久リダイレクト。
+server {
+    listen 80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}

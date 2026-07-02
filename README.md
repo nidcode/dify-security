@@ -296,8 +296,11 @@ curl -X POST http://localhost:4000/key/generate \
       インスタンス間は相互到達不可。LiteLLM は `172.17.0.1:4000` (bridge gateway) のみ公開 = LAN非公開。
 - [ ] **インスタンス機密の個別化 (実装済)**: `dify-new` が DB/Redis/Sandbox/Plugin/SECRET/INIT を
       再生成し `.env` を `chmod 600`。既知デフォルト(`difyai123456`/`dify-sandbox`)は残らない。
-- [ ] **TLS / リバースプロキシ**: Dify nginx・LiteLLM を nginx/Caddy/Traefik の背後に置き HTTPS 終端。
-      公開する場合は Dify の `CONSOLE_API_URL` 等 (`dify/instances/<name>/.env`) も公開URLに設定。
+- [ ] **TLS / リバースプロキシ + EntraID 認証 (実装あり)**: `compose.gateway.yaml` + `gateway/` に
+      **front-nginx + Keycloak + oauth2-proxy** の前段を用意 (A' 構成)。EntraID を Keycloak でブローカーし、
+      **サブドメイン(=インスタンス)ごとに EntraID グループで公開範囲を制御**する。操作は素の
+      `docker compose`。手順は [gateway/README.md](gateway/README.md)
+      (`scripts/gateway-difyenv.sh` で Dify の `CONSOLE_API_URL` 等も公開URL化)。
 - [ ] **シークレット管理**: `.env` は自動生成 + `chmod 600`。本番では Secrets Manager / Vault へ移行。
 - [ ] **ADC / Vertex を最小権限に**: 個人 ADC 全体ではなく、`aiplatform.user` のみの
       **サービスアカウント鍵**または **Workload Identity** を使う。マウントは必要な鍵1枚に限定。
@@ -387,8 +390,10 @@ aiop/
 ├── Makefile                  # LiteLLM 管理 + dify-new
 ├── .env.example              # 中央スタックのシークレット雛形 (→ .env, chmod 600)
 ├── compose.litellm.yaml      # LiteLLM ゲートウェイ + Postgres (172.17.0.1公開 / ADCマウント)
+├── compose.gateway.yaml      # 前段: front-nginx + Keycloak + oauth2-proxy (EntraID認証/公開範囲制御)
 ├── litellm/
 │   └── config.yaml           # モデル(LLM/埋め込み) / MCP / ガードレール
+├── gateway/                  # 前段の設定 (nginx/certs/instances) + README。詳細は gateway/README.md
 ├── dify/
 │   ├── compose.override.yaml  # host-gateway 接続 + web起動順 override (全インスタンス共通)
 │   ├── docker/               # 公式 Dify 一式 = 複製元テンプレ (追跡。ただし .env は除外)
