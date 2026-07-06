@@ -16,6 +16,10 @@ cd "$(dirname "$0")/.."
 
 NAME="${1:?usage: dify-new.sh <name> <port>}"
 PORT="${2:?usage: dify-new.sh <name> <port>}"
+# NAME は英数字と - _ のみ許容 (compose プロジェクト名/ボリューム名の制約)。
+# ディレクトリ名は元の大小文字を保持し、COMPOSE_PROJECT_NAME だけ小文字化する
+# (compose のプロジェクト名は小文字必須。teamA を素通しすると docker compose up が失敗)。
+[[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "❌ NAME は英数字と - _ のみ (先頭は英数字): '$NAME'"; exit 1; }
 SRC="dify/docker"
 DST="dify/instances/$NAME"
 ENV="$DST/.env"
@@ -48,10 +52,14 @@ upsert_env() { # 置換 or 追記
 rand() { openssl rand -hex 24; }
 
 # --- インスタンス識別 / 公開ポート ---
+# nginx HTTP のみ指定ポートで公開する。テンプレは SSL(443) とプラグインデバッグ(5003) も
+# 固定ホストポートで公開するため、2台目以降が port-in-use で起動失敗していた。
+# TLS は前段 gateway で終端し、プラグインリモートデバッグも通常運用では不要なので、
+# この2つは loopback のランダムポートへ退避 = 衝突と LAN 露出の双方を回避する。
 set_env EXPOSE_NGINX_PORT "$PORT"
-grep -q '^COMPOSE_PROJECT_NAME=' "$ENV" \
-  && sed -i "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=dify-$NAME|" "$ENV" \
-  || printf 'COMPOSE_PROJECT_NAME=dify-%s\n' "$NAME" >> "$ENV"
+set_env EXPOSE_NGINX_SSL_PORT "127.0.0.1:"        # → "127.0.0.1::443"  (ランダムなloopbackポート)
+set_env EXPOSE_PLUGIN_DEBUGGING_PORT "127.0.0.1:" # → "127.0.0.1::5003" (同上)
+upsert_env COMPOSE_PROJECT_NAME "dify-${NAME,,}"
 
 # --- 機密値をインスタンス固有に再生成 ---
 set_env SECRET_KEY "$(openssl rand -base64 42 | tr -d '\n=' )"
@@ -68,9 +76,13 @@ sandbox_key="$(rand)"
 set_env SANDBOX_API_KEY "$sandbox_key"
 set_env CODE_EXECUTION_API_KEY "$sandbox_key"
 
-# プラグイン基盤の相互認証鍵 (存在すれば)
+# プラグイン基盤の相互認証鍵 (存在すれば)。
+#   compose は PLUGIN_DIFY_INNER_API_KEY を api(INNER_API_KEY_FOR_PLUGIN) と
+#   plugin_daemon(DIFY_INNER_API_KEY) の双方へ供給する = これがテンプレ側の実キー。
+#   .env に INNER_API_KEY_FOR_PLUGIN は存在しない (set_env が無音スキップし既定鍵が残る) ため、
+#   PLUGIN_DIFY_INNER_API_KEY を再生成する。
 set_env PLUGIN_DAEMON_KEY "$(rand)"
-set_env INNER_API_KEY_FOR_PLUGIN "$(rand)"
+set_env PLUGIN_DIFY_INNER_API_KEY "$(rand)"
 
 # 既定ベクタDB (weaviate) の共有既定APIキーを個別化。client(api) と server(weaviate) で一致必須。
 if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
