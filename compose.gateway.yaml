@@ -1,0 +1,117 @@
+# =============================================================================
+# AIOP — Gateway スタック (A' 構成)
+#   front-nginx + Keycloak(+専用Postgres) を各 Dify の「前段」に置き、
+#   EntraID 認証を強制したうえで「誰がどのサブドメイン(=インスタンス)に
+#   到達できるか」= 公開範囲を制御する。
+#
+#   役割:
+#     - Keycloak (1個・全チーム共有) = 認証/認可の頭脳 (IdP)。
+#         EntraID を OIDC でブローカーし、EntraID グループ → Keycloak グループ
+#         (/aiop-<team>) にマッピングする。「誰がどのチームか」は Keycloak で一元管理。
+#     - oauth2-proxy (チームごとに1個) = リクエスト経路上の門番。
+#         Keycloak の該当 client でログインさせ、--allowed-group=/aiop-<team> で認可。
+#         ※ サービス定義は scripts/gateway-add.sh が gateway/instances/<team>.gateway.yaml
+#           に生成する (このファイルには含めない)。
+#     - front-nginx = 唯一の LAN 公開面 (443/80)。TLS 終端し、
+#         auth.<domain> → Keycloak、<team>.<domain> → 各 Dify インスタンス
+#         (host.docker.internal:<port>) へ、oauth2-proxy による auth_request 付きで振り分ける。
+#
+#   疎結合: 既存の Dify インスタンス / LiteLLM には一切変更を加えない純粋な追加。
+#           各 Dify インスタンスへは host-gateway (host.docker.internal:<port>) 経由で到達し、
+#           既存の分離モデル (共有 docker 網なし) を維持する。
+#
+#   起動: make gateway-up   (= docker compose -p aiop-gateway --env-file .env
+#                              -f compose.gateway.yaml -f gateway/instances/*.gateway.yaml up -d)
+# =============================================================================
+
+services:
+  # --- front-nginx: 唯一の LAN 公開面。TLS 終端 + auth_request ルーティング ---
+  front-nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./gateway/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # 公式 nginx イメージの templates 機能: 起動時に envsubst で
+      # /etc/nginx/templates/*.template → /etc/nginx/conf.d/*.conf を生成。
+      # NGINX_ENVSUBST_FILTER で GATEWAY_DOMAIN のみ置換 ($host 等の nginx 変数は温存)。
+      - ./gateway/nginx/templates:/etc/nginx/templates:ro
+      - ./gateway/certs:/etc/nginx/certs:ro
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
+      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN"
+      NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
+    extra_hosts:
+      # 各 Dify インスタンス (ホストの EXPOSE_NGINX_PORT) へ host-gateway 経由で到達。
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - gateway-internal
+
+  # --- Keycloak: IdP (EntraID ブローカー + グループ管理)。全チームで1個 ---
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    restart: always
+    command: ["start"]
+    environment:
+      # 管理ブートストラップ (Keycloak 26+)
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # DB
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      # 前段 nginx で TLS 終端するので http で動かし、公開ホスト名を明示。
+      KC_HOSTNAME: https://auth.${GATEWAY_DOMAIN}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      # oauth2-proxy が内部 http://keycloak:8080 でトークン/JWKS を取りに来られるように
+      # バックチャネルを動的解決可能にする (フロントは https://auth.<domain> のまま)。
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      # KC 26 は health を管理ポート(9000)に出す。イメージに curl/wget は無いが bash はある
+      # (kc.sh が bash) ため /dev/tcp で /health/ready を叩き HTTP 200 を確認する。
+      # これにより front-nginx は Keycloak が JWKS/トークンを配れる状態になってから起動する。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - gateway-internal
+
+  # --- Keycloak 用 Postgres (内部のみ・ポート非公開) ---
+  keycloak-db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak-pgdata:/var/lib/postgresql/data
+    networks:
+      - gateway-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d keycloak -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  keycloak-pgdata:
+
+networks:
+  # front-nginx / keycloak / keycloak-db / oauth2-proxy-<team> が載る内部網。
+  # Dify インスタンスの docker 網とは別 = 分離を維持。
+  gateway-internal:
+    name: aiop-gateway-internal
