@@ -46,6 +46,16 @@ if [[ -f .env && "$FORCE" != "--force" ]]; then
 fi
 
 # --- 新規作成 / --force 再生成モード ---
+# --force で既存 .env を作り直す際、シークレットは再生成してよいが「再生成できない
+# 運用者入力値」(外部発行キー / 識別子) まで雛形へ巻き戻すのは事故なので引き継ぐ。
+declare -A carry=()
+if [[ -f .env && "$FORCE" == "--force" ]]; then
+  for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
+    line="$(grep -m1 "^${k}=" .env || true)"
+    [[ -n "$line" ]] && carry["$k"]="${line#*=}"
+  done
+fi
+
 cp .env.example .env
 
 # --- LiteLLM ---
@@ -59,8 +69,18 @@ set_kv KEYCLOAK_ADMIN_PASSWORD     "$(hexn 16)"
 set_kv KEYCLOAK_DB_PASSWORD        "$(hexn 16)"
 set_kv OAUTH2_PROXY_COOKIE_SECRET  "$(b64 32)"
 
+# 運用者入力値を引き継ぐ (再生成対象外 = 雛形値へ戻さない)
+if ((${#carry[@]})); then
+  for k in "${!carry[@]}"; do set_kv "$k" "${carry[$k]}"; done
+fi
+
 # .env は機密 (マスターキー/DBパスワード等) → 権限を絞る
 chmod 600 .env
 
 echo "✅ .env を生成しました (シークレットは自動生成済み / chmod 600)。"
 echo "⚠️  必須: ANTHROPIC_API_KEY を実際のキーに。Gateway 利用時は GATEWAY_DOMAIN / ENTRA_* も。"
+if [[ "$FORCE" == "--force" ]]; then
+  echo "⚠️  --force で DB パスワード (LITELLM_DB_PASSWORD / KEYCLOAK_DB_PASSWORD) を再生成しました。"
+  echo "    初期化済みの Postgres ボリュームがあると認証不整合で起動失敗します。"
+  echo "    既存データが不要なら該当ボリュームを破棄してから up してください (例: docker volume ls)。"
+fi

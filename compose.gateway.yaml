@@ -48,7 +48,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       keycloak:
-        condition: service_started
+        condition: service_healthy
     networks:
       - gateway-internal
 
@@ -77,6 +77,15 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+    healthcheck:
+      # KC 26 は health を管理ポート(9000)に出す。イメージに curl/wget は無いが bash はある
+      # (kc.sh が bash) ため /dev/tcp で /health/ready を叩き HTTP 200 を確認する。
+      # これにより front-nginx は Keycloak が JWKS/トークンを配れる状態になってから起動する。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     networks:
       - gateway-internal
 
