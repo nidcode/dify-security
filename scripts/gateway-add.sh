@@ -174,12 +174,13 @@ server {
     }
 
     # --- 機械系エンドポイント: 対話 SSO を課さない (Dify 内の APIキー/署名で認証) ---
-    location /v1       { proxy_pass http://host.docker.internal:${PORT}; }
-    location /triggers { proxy_pass http://host.docker.internal:${PORT}; }
-    location /e/       { proxy_pass http://host.docker.internal:${PORT}; }
-    location /mcp      { proxy_pass http://host.docker.internal:${PORT}; }
-    # /files はブラウザ利用前提で下記 / (SSO) に含める。API から取得する運用なら次行を有効化:
-    # location /files  { proxy_pass http://host.docker.internal:${PORT}; }
+    # /v1 /triggers /e /mcp とその配下だけに厳密一致させる。素の前方一致 (location /v1) は
+    # /v1x や /mcp-admin 等にも一致して無認証範囲が広がるため正規表現で境界を切る。
+    # X-Auth-* は nginx.conf の http{} で空にクリア済み = ここへ注入されても Dify へは渡らない。
+    # /files をAPI取得する運用なら files を追加: ^/(v1|triggers|e|mcp|files)(/|\$)
+    location ~ ^/(v1|triggers|e|mcp)(/|\$) {
+        proxy_pass http://host.docker.internal:${PORT};
+    }
 
     # --- 対話系: EntraID/Keycloak で認可 (/aiop-${NAME} 所属者のみ) ---
     location / {
@@ -187,6 +188,17 @@ server {
         error_page 401 = /oauth2/sign_in;
         auth_request_set \$auth_user  \$upstream_http_x_auth_request_user;
         auth_request_set \$auth_email \$upstream_http_x_auth_request_email;
+        # このブロックは proxy_set_header を自前定義するため http{} の共通ヘッダを継承しない
+        # (nginx の array 継承は all-or-nothing)。Host/X-Forwarded/WebSocket を明示再掲する。
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host  \$host;
+        proxy_set_header X-Forwarded-Port  443;
+        proxy_set_header Upgrade           \$http_upgrade;
+        proxy_set_header Connection        \$connection_upgrade;
+        # 認証済み ID は auth_request の結果のみ信頼 (クライアント送信値を上書き)。
         proxy_set_header X-Auth-User  \$auth_user;
         proxy_set_header X-Auth-Email \$auth_email;
         proxy_pass http://host.docker.internal:${PORT};
