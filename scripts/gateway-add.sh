@@ -91,20 +91,16 @@ KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
   -s 'config."userinfo.token.claim"=true' >/dev/null
 echo "✅ client に groups マッパーを付与"
 
-# --- 3. (任意) EntraID → /aiop-<team> の IdP マッパー ---
+# --- 3. (任意) EntraID → /aiop-<team> の対応付け (両パターン対応) ---
+#   実際のマッパー生成は scripts/gateway-grant.sh に一本化 (kcadm -s の JSON クォート崩れを回避)。
+#   claim=roles(B/P1: App ロール) / groups(A/Free: セキュリティグループ Object ID)。
 if [[ -n "$ENTRA_GROUP" ]]; then
-  KC create identity-provider/instances/entraid/mappers -r "$KEYCLOAK_REALM" \
-    -s name="${GROUP}-from-entra" \
-    -s identityProviderAlias=entraid \
-    -s identityProviderMapper=oidc-advanced-group-idp-mapper \
-    -s "config.claims=[{\"key\":\"${ENTRA_CLAIM}\",\"value\":\"${ENTRA_GROUP}\"}]" \
-    -s "config.group=/${GROUP}" \
-    -s 'config.syncMode=FORCE' >/dev/null
-  echo "✅ IdP マッパー: EntraID ${ENTRA_CLAIM}='${ENTRA_GROUP}' → /${GROUP}"
+  bash scripts/gateway-grant.sh "$NAME" "$ENTRA_GROUP" "$ENTRA_CLAIM"
 else
-  echo "ℹ ENTRA_GROUP 未指定 → EntraID 対応マッパーは未作成。"
-  echo "   後で Keycloak 管理画面 (Identity Providers > entraid > Mappers) で作成するか、"
-  echo "   ユーザーを直接グループ /${GROUP} に入れてもよい。"
+  echo "ℹ ENTRA_GROUP 未指定 → 公開範囲(部署割当)は後で付与する:"
+  echo "   B(P1):  bash scripts/gateway-grant.sh $NAME <App ロール名> roles"
+  echo "   A(Free): bash scripts/gateway-grant.sh $NAME <グループ Object ID> groups"
+  echo "   もしくは Keycloak でユーザーを直接 /$GROUP に追加。"
 fi
 
 # --- 4. oauth2-proxy サービスを集約 compose ファイルに追記 ---
