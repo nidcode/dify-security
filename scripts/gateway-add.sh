@@ -127,6 +127,9 @@ cat >> "$AGG" <<YAML
       - --redirect-url=https://${FQDN}/oauth2/callback
       - --cookie-domain=${FQDN}
       - --whitelist-domain=${FQDN}
+      # cookie 名をインスタンス毎に一意化。既定 _oauth2_proxy を共有すると、親ドメインに
+      # またがる cookie-domain 設定時に別インスタンスへ漏れて同名衝突するのを防ぐ。
+      - --cookie-name=_oauth2_proxy_${NAME}
       - --cookie-secret=\${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=true
       - --email-domain=*

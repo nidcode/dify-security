@@ -24,6 +24,8 @@ gateway/certs/*
 gateway/oauth2-proxies.gateway.yaml
 # チーム別 server ブロック (生成物)
 gateway/nginx/templates/team-*.conf.template
+# デプロイ固有のローカル追加テンプレート (バレ→app リダイレクト等)
+gateway/nginx/templates/local-*.conf.template
 
 # OS
 .DS_Store
