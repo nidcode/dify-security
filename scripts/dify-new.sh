@@ -63,7 +63,9 @@ upsert_env COMPOSE_PROJECT_NAME "dify-${NAME,,}"
 
 # --- 機密値をインスタンス固有に再生成 ---
 set_env SECRET_KEY "$(openssl rand -base64 42 | tr -d '\n=' )"
-set_env INIT_PASSWORD "$(rand)"          # 管理者登録ページのゲート
+# INIT_PASSWORD は Dify の /console/api/init が最大30文字を課すため hex 12(=24文字) で生成。
+#   rand()=hex24=48文字 だと正しい値でも 422 validation error で入力不能になる。
+set_env INIT_PASSWORD "$(openssl rand -hex 12)"   # 管理者登録ページのゲート (30文字以内必須)
 set_env DB_PASSWORD "$(rand)"            # Postgres (URL は各パーツから構築される)
 
 # Redis: パスワード本体 + それをインライン埋め込みする URL(CELERY_BROKER_URL 等) を同値に揃える
