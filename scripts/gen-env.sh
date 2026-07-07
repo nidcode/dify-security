@@ -36,7 +36,9 @@ if [[ -f .env && "$FORCE" != "--force" ]]; then
   ensure_kv KEYCLOAK_ADMIN           "admin"
   ensure_kv KEYCLOAK_ADMIN_PASSWORD  "$(hexn 16)"
   ensure_kv KEYCLOAK_DB_PASSWORD     "$(hexn 16)"
-  ensure_kv OAUTH2_PROXY_COOKIE_SECRET "$(b64 32)"
+  # oauth2-proxy は鍵長を 16/24/32 byte で判定する。base64(32)=44文字は弾かれるため
+  # 32文字(=32 byte raw, AES-256鍵) の hex を使う。
+  ensure_kv OAUTH2_PROXY_COOKIE_SECRET "$(hexn 16)"
   ensure_kv ENTRA_TENANT_ID          "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   ensure_kv ENTRA_CLIENT_ID          "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   ensure_kv ENTRA_CLIENT_SECRET      "CHANGE-ME-entra-client-secret"
@@ -67,7 +69,7 @@ set_kv LITELLM_DB_PASSWORD "$(hexn 16)"
 # --- Gateway (nginx + Keycloak + oauth2-proxy) ---
 set_kv KEYCLOAK_ADMIN_PASSWORD     "$(hexn 16)"
 set_kv KEYCLOAK_DB_PASSWORD        "$(hexn 16)"
-set_kv OAUTH2_PROXY_COOKIE_SECRET  "$(b64 32)"
+set_kv OAUTH2_PROXY_COOKIE_SECRET  "$(hexn 16)"   # 16/24/32 byte 制約 → 32文字hex
 
 # 運用者入力値を引き継ぐ (再生成対象外 = 雛形値へ戻さない)
 if ((${#carry[@]})); then

@@ -16,10 +16,14 @@ dify/docker/volumes/plugin_daemon/
 dify/instances/
 
 # Gateway 生成物・機密
-gateway/certs/*            # TLS 証明書 (wildcard)。.gitkeep のみ残す
+# ※ gitignore はインライン # コメントを解釈しない (行頭のみ)。パターンと同じ行に書くと無効化される。
+# TLS 証明書 (wildcard)。.gitkeep のみ残す
+gateway/certs/*
 !gateway/certs/.gitkeep
-gateway/oauth2-proxies.gateway.yaml            # oauth2-proxy サービス群 (client secret を含む)
-gateway/nginx/templates/team-*.conf.template   # チーム別 server ブロック (生成物)
+# oauth2-proxy サービス群 (client secret を含む)
+gateway/oauth2-proxies.gateway.yaml
+# チーム別 server ブロック (生成物)
+gateway/nginx/templates/team-*.conf.template
 
 # OS
 .DS_Store
