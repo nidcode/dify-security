@@ -86,6 +86,64 @@ cd dify/instances/teamA && docker compose up -d && cd -
   - ⚠ **同一インスタンスで console と公開 Web アプリを綺麗に分離できない** (同じ Next.js が `/` 配下で
     静的資産を共有)。公開ボットは専用インスタンス+専用サブドメインに分けるのが堅い。
 
+## 部署 → インスタンスの割当 (2パターン / 環境の licensing で選択)
+
+「どの部署がどの Dify に入れるか」は Keycloak グループ `/aiop-<team>` への所属で決まる。
+その所属を **EntraID 側の割当から自動導出**する方法が licensing で2通りある。どちらも
+`scripts/gateway-grant.sh` に集約され、`syncMode=FORCE` によりログイン毎に自動付与/剥奪
+される (人事異動は EntraID 側の変更だけで完結)。
+
+### B. Entra ID P1 以上 → App ロール (claim=roles) 【推奨】
+
+割当を EntraID の1画面 (Enterprise App) に集約でき、アクセスレビュー/監査が効く。
+
+1. アプリ登録 > アプリ ロール で ロール (例 `aiop-sales`) を定義。
+2. エンタープライズ アプリケーション > ユーザーとグループ で **部署グループを App ロールに割当**
+   (グループ割当は P1 必須)。→ トークンの `roles` クレームに載る。
+3. gateway 側 (claim 既定=roles):
+   ```bash
+   bash scripts/gateway-grant.sh sales aiop-sales
+   ```
+
+### A. Free / P1 なし → セキュリティグループ (claim=groups)
+
+App ロールへのグループ割当が使えない場合。グループ所属を `groups` クレームで判定する。
+
+1. Azure アプリ登録 > トークン構成 で **groups クレームを発行** (種類=セキュリティ グループ)。
+   → トークンの `groups` に **グループ Object ID (GUID)** が載る (グループ名ではない)。
+2. 対象部署グループの **Object ID** を控える (Entra > グループ > 概要)。
+3. gateway 側 (claim=groups):
+   ```bash
+   bash scripts/gateway-grant.sh sales 11111111-2222-3333-4444-555555555555 groups
+   ```
+
+> `gateway-add.sh` の第4/第5引数でも同じことができる (`<entra_value> [roles|groups]`)。
+> 内部的に `gateway-grant.sh` を呼ぶだけなので挙動は同一。
+
+### 多対多・剥奪
+
+```bash
+# 同一インスタンスに複数部署を許可 → 部署ごとに grant (マッパーは値ごとに一意)
+bash scripts/gateway-grant.sh sharedbot aiop-sales
+bash scripts/gateway-grant.sh sharedbot aiop-dev
+# 剥奪 (マッパー削除。既存所属は次回ログインで外れる)
+bash scripts/gateway-grant.sh --remove sales aiop-sales
+```
+
+### 暫定/個別: マッパーを使わず特定ユーザーだけ通す
+
+検証や例外運用。Keycloak 管理画面: **Users > 対象 > Groups > Join > /aiop-\<team\>**。
+CLI なら:
+
+```bash
+GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
+KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+KC config credentials --server http://localhost:8080 --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+U=$(KC get users -r aiop -q email=<addr> --fields id --format csv | tr -d '"')
+G=$(KC get groups -r aiop --fields id,name --format csv | grep '"aiop-<team>"' | cut -d, -f1 | tr -d '"')
+KC update users/$U/groups/$G -r aiop -s realm=aiop -s userId=$U -s groupId=$G -n
+```
+
 ## 二重ログインについて (重要)
 
 Dify **Community 版はネイティブ SSO 非対応**。front-nginx の EntraID 認証は「到達可否の関所」であり、

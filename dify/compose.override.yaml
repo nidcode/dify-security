@@ -15,6 +15,12 @@ services:
   api:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # dify-new.sh は EXPOSE_PLUGIN_DEBUGGING_PORT を "127.0.0.1:" にして 5003 の固定/LAN 公開を
+    # 避ける。しかし公式 compose は同じ変数を PLUGIN_REMOTE_INSTALL_PORT(整数の設定値) にも流用する
+    # ため、api の設定バリデーションが "127.0.0.1:" を整数解釈できず起動不能になる。
+    # remote plugin install はこの構成で未使用なので、整数に固定して両立させる。
+    environment:
+      PLUGIN_REMOTE_INSTALL_PORT: "5003"
   api_websocket:
     extra_hosts:
       - "host.docker.internal:host-gateway"
