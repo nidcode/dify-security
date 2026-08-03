@@ -26,6 +26,8 @@ gateway/oauth2-proxies.gateway.yaml
 gateway/nginx/templates/team-*.conf.template
 # デプロイ固有のローカル追加テンプレート (バレ→app リダイレクト等)
 gateway/nginx/templates/local-*.conf.template
+# WIF 用 Keycloak client secret (scripts/gateway-wif-client.sh の生成物)
+gateway/wif/
 
 # OS
 .DS_Store
