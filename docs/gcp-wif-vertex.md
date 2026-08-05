@@ -57,20 +57,14 @@ bash scripts/gateway-wif-client.sh litellm-vertex-wif \
 
 → `dify-litellm-vertex@<PROJECT_ID>.iam.gserviceaccount.com`
 
-### Step 3+4. Workload Identity プール + プロバイダ (CLI推奨)
+### Step 3+4. Workload Identity プール + プロバイダ
 
-> **Console の制約**: プール作成ウィザードはプロバイダ追加とセットで、JWKS静的登録の項目が
-> 無い(2026年時点で確認)。issuer 非公開運用にするには、この2つは gcloud CLI で作る。
+**Console(GUI)で完結できる**(JWKS静的登録もConsoleのフォームから可能。CLIは不要)。
+
+まず、JWKSファイルをローカルに用意する(Keycloakイメージに curl/wget/python3 が無いため
+`/dev/tcp` 経由):
 
 ```bash
-export PROJECT_ID="<PROJECT_ID>"
-export PROJECT_NUMBER="<PROJECT_NUMBER>"   # ダッシュボードの「プロジェクト情報」カード
-
-gcloud iam workload-identity-pools create dify-litellm-pool \
-  --project="${PROJECT_ID}" --location="global" \
-  --display-name="Dify LiteLLM (self-hosted, Keycloak federated)"
-
-# JWKS を Keycloak コンテナ内から取得 (curl 不在のため /dev/tcp)
 mkdir -p gateway/wif
 docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml \
   exec -T keycloak bash -c '
@@ -79,6 +73,30 @@ docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml \
   cat <&3
   ' | tr -d '\r' | awk 'BEGIN{body=0} /^$/ && body==0 {body=1; next} body{print}' \
     > gateway/wif/litellm-vertex-wif-jwks.json
+```
+
+**☰ > IAM と管理 > Workload Identity 連携 > プールを作成**
+
+1. プール名: `dify-litellm-pool`
+2. 同じウィザード内で「プロバイダを追加」(プール作成はプロバイダ追加とセットになっている):
+   - プロバイダの形式: **OpenID Connect (OIDC)**
+   - プロバイダ名: `keycloak-oidc`
+   - 発行元 (Issuer) URL: `https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}`
+   - オーディエンス: デフォルトではなくカスタム値を指定
+     (`gateway-wif-client.sh` が出力した `WIF_AUDIENCE`)
+   - **JSON Web Key Set**: 上で生成した `gateway/wif/litellm-vertex-wif-jwks.json` をアップロード
+     → これにより issuer への動的フェッチが不要になり、GCPからKeycloakへ到達できなくてもよい
+   - 属性マッピング: `google.subject` = `assertion.sub`、`attribute.client_id` = `assertion.azp`
+   - 属性条件: `assertion.azp=='litellm-vertex-wif'`
+
+CLIでも同等のことができる(自動化したい場合):
+
+```bash
+export PROJECT_ID="<PROJECT_ID>"
+
+gcloud iam workload-identity-pools create dify-litellm-pool \
+  --project="${PROJECT_ID}" --location="global" \
+  --display-name="Dify LiteLLM (self-hosted, Keycloak federated)"
 
 gcloud iam workload-identity-pools providers create-oidc keycloak-oidc \
   --project="${PROJECT_ID}" --location="global" \
@@ -116,6 +134,9 @@ gcloud iam workload-identity-pools providers create-oidc keycloak-oidc \
 
 または CLI:
 ```bash
+export PROJECT_ID="<PROJECT_ID>"
+export PROJECT_NUMBER="<PROJECT_NUMBER>"   # ダッシュボードの「プロジェクト情報」カード
+
 gcloud iam service-accounts add-iam-policy-binding \
   dify-litellm-vertex@${PROJECT_ID}.iam.gserviceaccount.com \
   --project="${PROJECT_ID}" \
@@ -151,8 +172,9 @@ JWT (`gateway/wif/litellm-vertex-wif.env` の `KEYCLOAK_TOKEN_URL_INTERNAL` を
 - `gateway/wif/` ディレクトリは `gateway-wif-client.sh` 実行時に自動作成される。
   スクリプトを介さず単独でJWKS取得コマンドを打つ場合は先に `mkdir -p gateway/wif` が要る。
 - ロール表示名は Vertex AI User → **Agent Platform ユーザー** (roles/aiplatform.user は不変)。
-- Pool作成ウィザード(Console)はProvider追加とセット。JWKS静的登録の項目がConsoleに無いため
-  Pool+Providerは CLI 推奨。
+- Pool作成ウィザード(Console)はProvider追加とセットで、単独でPoolだけ作ることはできない。
+  JWKS静的登録もConsoleのプロバイダ作成フォームの「JSON Web Key Set」欄からアップロード可能
+  (CLIの`--jwk-json-path`は必須ではなく、単なる同等の代替手段)。
 - issuer-uri は到達可能なURLである必要はなく、`iss` クレームとの文字列一致にのみ使われる
   (JWKS静的登録時)。ローカルURLに変える必要はない。
 - サービスアカウント詳細画面の「権限」タブに直接の付与ボタンは無く、
