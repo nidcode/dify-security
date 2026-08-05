@@ -16,6 +16,14 @@
 #   GCP 側の attribute-condition は "assertion.azp=='<client-id>'" にする
 #   (Keycloak は client_credentials で発行したトークンにも azp=client_id を必ず載せる)。
 #
+#   auth.${GATEWAY_DOMAIN} を GCP から到達させたくない場合 (issuer 非公開運用):
+#     - GCP 側は providers create-oidc に --jwk-json-path で JWKS を静的登録すれば、
+#       GCP は issuer に一切アクセスしない (iss クレームの文字列一致のみで検証)。
+#     - トークン取得自体も Keycloak がホストへポート非公開のため外部URLを使わずに
+#       完結できる。ただし quay.io/keycloak/keycloak イメージには curl/wget/python3 が
+#       無く bash のみなので、`docker compose exec keycloak bash` の中で bash 組込みの
+#       /dev/tcp を使い生の HTTP リクエストを送る (実行例は最後の出力を参照)。
+#
 #   使い方:
 #     bash scripts/gateway-wif-client.sh [client-id] [audience]
 #     例: bash scripts/gateway-wif-client.sh litellm-vertex-wif \
@@ -77,12 +85,28 @@ KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
 echo "✅ client に Audience マッパーを付与 (aud=${AUDIENCE})"
 
 # --- 3. 出力 (LiteLLM ホスト側のトークン取得スクリプトが参照する) ---
+# ISSUER_URI は KC_HOSTNAME (compose.gateway.yaml) 由来で iss クレームに埋め込まれる値。
+# GCP 側 --issuer-uri / --attribute-condition の文字列一致にのみ使う識別子であり、
+# --jwk-json-path で静的検証する場合はこの URL に GCP が到達できる必要はない。
 ISSUER_URI="https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}"
-TOKEN_URL="https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token"
+# Keycloak はホストへポート非公開のため、外部URLではなくコンテナ内部の localhost を指す。
+# コンテナに curl/wget/python3 が無いため、呼び出し側は
+# `docker compose exec keycloak bash` の中で /dev/tcp 経由でこのパスを叩くこと
+# (ホストから直接 curl しても localhost:8080 は届かない/別プロセスに当たる)。
+TOKEN_URL_INTERNAL="http://localhost:8080/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token"
+JWKS_URL_INTERNAL="http://localhost:8080/realms/${KEYCLOAK_REALM}/protocol/openid-connect/certs"
+# client_credentials のリクエストボディと Content-Length を先に計算しておく
+# (コンテナ内に curl が無いため、下の実行例では bash の /dev/tcp で生の HTTP を組み立てる)。
+TOKEN_BODY="grant_type=client_credentials&client_id=${CLIENT}&client_secret=${CLIENT_SECRET}"
+TOKEN_BODY_LEN="${#TOKEN_BODY}"
 cat > "$OUTFILE" <<EOF
 # 生成物 (scripts/gateway-wif-client.sh)。client secret を含むため .gitignore 済み・chmod 600。
 KEYCLOAK_ISSUER_URI=${ISSUER_URI}
-KEYCLOAK_TOKEN_URL=${TOKEN_URL}
+# 以下2つは Keycloak コンテナの内部 localhost 宛パス。curl/wget/python3 が無いイメージなので
+#   docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml exec -T keycloak bash
+# の中で /dev/tcp 経由 (実行例は本スクリプト実行時の最後の出力を参照) で叩くこと。
+KEYCLOAK_TOKEN_URL_INTERNAL=${TOKEN_URL_INTERNAL}
+KEYCLOAK_JWKS_URL_INTERNAL=${JWKS_URL_INTERNAL}
 WIF_CLIENT_ID=${CLIENT}
 WIF_CLIENT_SECRET=${CLIENT_SECRET}
 WIF_AUDIENCE=${AUDIENCE}
@@ -103,9 +127,24 @@ GCP 側でこの値を使う (前回提示した手順の変数と対応):
   → providers create-oidc の --issuer-uri / --allowed-audiences と
     --attribute-condition="assertion.azp=='${CLIENT}'" に反映してください。
 
-疎通確認 (client_credentials で実際にトークンが取れるか):
-  curl -s -d grant_type=client_credentials \\
-    -d client_id=${CLIENT} -d client_secret=${CLIENT_SECRET} \\
-    ${TOKEN_URL} | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"][:40], "...")'
+  issuer を GCP から到達させたくない場合は --jwk-json-path で JWKS を静的登録:
+  (コンテナに curl が無いため bash の /dev/tcp で生の HTTP を送る。gateway/wif は無ければ作る)
+    mkdir -p gateway/wif
+    ${GW} exec -T keycloak bash -c '
+    exec 3<>/dev/tcp/localhost/8080
+    printf "GET /realms/${KEYCLOAK_REALM}/protocol/openid-connect/certs HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
+    cat <&3
+    ' | tr -d '\r' | awk 'BEGIN{body=0} /^$/ && body==0 {body=1; next} body{print}' \
+      > gateway/wif/${CLIENT}-jwks.json
+    → gcloud ... providers create-oidc ... --jwk-json-path=gateway/wif/${CLIENT}-jwks.json
+  ※ Keycloak の署名鍵ローテーション時は再取得・再登録が必要 (自動フェッチ方式ならこの手間は不要)。
+
+疎通確認 (client_credentials で実際にトークンが取れるか。curl不在+ポート非公開のため /dev/tcp 経由):
+  ${GW} exec -T keycloak bash -c '
+  exec 3<>/dev/tcp/localhost/8080
+  printf "POST /realms/${KEYCLOAK_REALM}/protocol/openid-connect/token HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${TOKEN_BODY_LEN}\r\n\r\n${TOKEN_BODY}" >&3
+  cat <&3
+  ' | tr -d '\r' | awk 'BEGIN{body=0} /^$/ && body==0 {body=1; next} body{print}' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"][:40], "...")'
 ────────────────────────────────────────────────────────────────
 EOF

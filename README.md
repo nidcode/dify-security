@@ -304,6 +304,7 @@ curl -X POST http://localhost:4000/key/generate \
 - [ ] **シークレット管理**: `.env` は自動生成 + `chmod 600`。本番では Secrets Manager / Vault へ移行。
 - [ ] **ADC / Vertex を最小権限に**: 個人 ADC 全体ではなく、`aiplatform.user` のみの
       **サービスアカウント鍵**または **Workload Identity** を使う。マウントは必要な鍵1枚に限定。
+      Keycloakを外部OIDC IdPにしたWIF手順は [docs/gcp-wif-vertex.md](docs/gcp-wif-vertex.md)。
 - [ ] **仮想キーでテナント分離**: インスタンスごとに別キー + `models` allowlist + 予算/RPM を設定。
       マスターキー (`LITELLM_MASTER_KEY`) は運用者のみが保持し、Dify には渡さない。
 - [ ] **データ at rest**: `dify/instances/<name>/volumes/` はホスト平文。ディレクトリ権限の厳格化・
