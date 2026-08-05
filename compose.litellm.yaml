@@ -23,8 +23,12 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-      # ADC (gcloud Application Default Credentials) をマウント (読み取り専用)
-      - ${HOME}/.config/gcloud:/gcloud:ro
+      # Vertex AI 認証 (WIF): 個人 ADC 全体ではなく、専用SA(aiplatform.userのみ)への
+      # Workload Identity Federation。credentials.json は秘密を含まない (external_account
+      # 設定のみ)。keycloak-token.jwt は scripts/gateway-wif-refresh-token.sh が cron で
+      # 定期更新する短命JWT。詳細: docs/gcp-wif-vertex.md
+      - ./gateway/wif/credentials.json:/gcloud-wif/credentials.json:ro
+      - ./gateway/wif/keycloak-token.jwt:/gcloud-wif/keycloak-token.jwt:ro
     ports:
       # docker bridge gateway (既定 172.17.0.1) にのみ公開。
       # Dify コンテナは host.docker.internal(=このIP) 経由で到達。LAN には露出しない。
@@ -41,8 +45,8 @@ services:
       UI_PASSWORD: ${LITELLM_UI_PASSWORD}
       # プロバイダ資格情報
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      # --- Vertex AI (Gemini埋め込み) を ADC で利用 (APIキー不要) ---
-      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/application_default_credentials.json
+      # --- Vertex AI (Gemini埋め込み) を Workload Identity Federation で利用 (APIキー/鍵不要) ---
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud-wif/credentials.json
       VERTEX_PROJECT: ${VERTEX_PROJECT}
       VERTEX_LOCATION: ${VERTEX_LOCATION:-us-central1}
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.docker.internal:11434}
