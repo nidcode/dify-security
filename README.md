@@ -222,6 +222,14 @@ Dify のモデルプロバイダプラグインは **plugin_daemon コンテナ�
 LiteLLM への経路 (`host.docker.internal:4000`) は `NO_PROXY` で除外済みのため、
 接続設定 A の手順どおり動作します。
 
+> **拒否ルール(ブロックリスト)であり、許可ルール(アローリスト)ではない**:
+> `model_egress_guard` は「既定許可・主要プロバイダのみ明示的に拒否」というポリシーです。
+> これは sandbox 用の `ssrf_proxy`(「既定拒否・`marketplace.dify.ai` のみ明示的に許可」の
+> **許可ルール**)とは逆方向の設計です。plugin_daemon には ssrf_proxy と同じ許可ルールを
+> 適用しなかった理由は、Tavily などツールプラグインが使う無数の外部APIドメインを
+> 個別に許可リスト登録しない限り軒並みブロックされてしまうため。「主要モデルプロバイダ
+> だけを塞ぎ、それ以外の正当な通信は妨げない」目的にはブロックリスト方式が適しています。
+
 - **既定拒否ドメイン**: `dify/model-egress-guard/blocked-model-providers.txt`
   (OpenAI / Anthropic / Google Gemini・Vertex / Azure OpenAI / AWS Bedrock / Cohere /
   Mistral / Groq / Perplexity / Together AI / Fireworks / DeepSeek / xAI / Replicate /
