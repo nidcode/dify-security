@@ -52,6 +52,9 @@ fi
 if [[ -d dify/docker ]]; then
   cp dify/compose.override.yaml dify/docker/docker-compose.override.yaml
   echo "  docker-compose.override.yaml を配置 (host-gateway 経由で LiteLLM 到達)"
+  mkdir -p dify/docker/model-egress-guard
+  cp -R dify/model-egress-guard/. dify/docker/model-egress-guard/
+  echo "  model-egress-guard を配置 (主要モデルプロバイダへの直接到達を既定で遮断)"
 fi
 
 echo ""

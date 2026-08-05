@@ -1,0 +1,49 @@
+# =============================================================================
+# model_egress_guard — 「主要モデルプロバイダのみ拒否・それ以外は許可」の
+# フォワードプロキシ。dify/docker/ssrf_proxy (= 既定拒否・marketplace のみ許可)
+# とは目的が異なるため別コンテナとして用意している:
+#   - ssrf_proxy      : sandbox の SSRF 対策 (既定拒否)
+#   - model_egress_guard: plugin_daemon から LLM プロバイダへの「直接」到達のみ
+#                         拒否し、marketplace/OAuth/pip/npm 等それ以外の
+#                         plugin_daemon の正当な通信は妨げない (既定許可)
+#
+# ブロック対象ドメインは blocked-model-providers.txt を参照 (編集後は
+# `docker compose restart model_egress_guard` で反映)。
+# =============================================================================
+
+acl SSL_ports port 443
+acl Safe_ports port 80		# http
+acl Safe_ports port 443	# https
+acl Safe_ports port 1025-65535	# unregistered ports
+acl CONNECT method CONNECT
+
+# 主要モデルプロバイダ (CONNECT 先ホスト名 / Host ヘッダを正規表現で照合)
+acl blocked_llm_providers dstdom_regex -i "/etc/squid/blocked-model-providers.txt"
+
+http_access deny blocked_llm_providers
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access allow localhost manager
+http_access deny manager
+http_access allow localhost
+http_access allow all
+
+tcp_outgoing_address 0.0.0.0
+
+################################## Proxy Server ################################
+http_port ${HTTP_PORT}
+coredump_dir ${COREDUMP_DIR}
+refresh_pattern .		0	20%	4320
+
+# キャッシュ不要 (統制/遮断が目的でパフォーマンス最適化は不要)
+cache deny all
+
+################################## Timeouts #####################################
+connect_timeout 30 seconds
+request_timeout 2 minutes
+read_timeout 2 minutes
+
+################################## Logging ######################################
+logformat guard_log %ts.%03tu %6tr %>a %Ss/%03>Hs %<st %rm %ru
+access_log daemon:/var/log/squid/access.log guard_log
+logfile_rotate 10

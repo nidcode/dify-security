@@ -31,6 +31,9 @@ mkdir -p dify/instances
 cp -R "$SRC" "$DST"
 # host-gateway 経由で LiteLLM に到達するための override (全インスタンス共通)
 cp dify/compose.override.yaml "$DST/docker-compose.override.yaml"
+# 主要モデルプロバイダへの直接到達を既定で遮断するプロキシ一式 (全インスタンス共通)
+mkdir -p "$DST/model-egress-guard"
+cp -R dify/model-egress-guard/. "$DST/model-egress-guard/"
 
 # .env は機密のため追跡されない (テンプレには .env.example のみ)。
 # 複製後に .env が無ければ .env.example から用意する。
