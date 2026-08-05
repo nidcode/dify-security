@@ -53,7 +53,7 @@ fi
 # 運用者入力値」(外部発行キー / 識別子) まで雛形へ巻き戻すのは事故なので引き継ぐ。
 declare -A carry=()
 if [[ -f .env && "$FORCE" == "--force" ]]; then
-  for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
+  for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN KEYCLOAK_GROUP_PREFIX ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
     line="$(grep -m1 "^${k}=" .env || true)"
     [[ -n "$line" ]] && carry["$k"]="${line#*=}"
   done
