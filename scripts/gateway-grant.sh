@@ -41,7 +41,8 @@ CLAIM="${3:-roles}"
 set -a; . ./.env; set +a
 : "${KEYCLOAK_REALM:?}"; : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
 
-GROUP="aiop-${NAME}"
+# グループ接頭辞は .env に一元化 (gateway-add.sh と同じ値を見る必要がある)。
+GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 # マッパー名は team+claim+値で一意 (多対多で複数部署→同一インスタンスを許可するため)。
 # Keycloak マッパー名に使えない文字は _ に置換。
 SAFE_VALUE="$(printf '%s' "$VALUE" | tr -c 'A-Za-z0-9._-' '_')"
