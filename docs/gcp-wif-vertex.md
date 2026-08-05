@@ -157,6 +157,16 @@ JWT (`gateway/wif/litellm-vertex-wif.env` の `KEYCLOAK_TOKEN_URL_INTERNAL` を
   (JWKS静的登録時)。ローカルURLに変える必要はない。
 - サービスアカウント詳細画面の「権限」タブに直接の付与ボタンは無く、
   「アクセス権を持つプリンシパル」リンク経由で遷移してから付与する。
+- LiteLLM UIから「Add Model」する場合、**「Vertex Credentials」欄は空欄にしない**。
+  空欄でもUIは`{}`を送信するため、LiteLLMの`load_auth()`が`{}`をサービスアカウント鍵として
+  パースしようとして `missing fields client_email, token_uri` で失敗する。
+  `gateway/wif/credentials.json` の中身をそのまま貼り付けること(`type: external_account`が
+  正しく検出され `identity_pool.Credentials` 経由の処理に入る)。
+  ※ `litellm/config.yaml` に静的定義する場合は `vertex_credentials` キー自体を書かなければ
+  `credentials=None` となり ADC (`google.auth.default()`) に正しくフォールバックする
+  (このリポジトリの `gemini-embedding` エントリはこちらの方式)。
+- 同様にUI追加時は「Vertex Project」欄も必須。WIF資格情報にはサービスアカウント鍵と違い
+  `project_id` が含まれないため、明示しないと `Could not resolve project_id` で失敗する。
 
 ## 運用: compose切り替え + トークン定期更新
 
