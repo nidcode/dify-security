@@ -39,7 +39,8 @@ set -a; . ./.env; set +a
 : "${OAUTH2_PROXY_COOKIE_SECRET:?}"
 
 FQDN="${SUB}.${GATEWAY_DOMAIN}"
-GROUP="aiop-${NAME}"
+# グループ接頭辞は .env に一元化 (gateway-grant.sh と同じ値を見る必要がある)。
+GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 CLIENT="oauth2-proxy-${NAME}"
 AGG="gateway/oauth2-proxies.gateway.yaml"
 NCONF="gateway/nginx/templates/team-${SUB}.conf.template"

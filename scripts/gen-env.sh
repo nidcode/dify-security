@@ -33,6 +33,7 @@ if [[ -f .env && "$FORCE" != "--force" ]]; then
   # Gateway 用キー (新規追加分)。シークレットは生成、非機密は雛形値。
   ensure_kv GATEWAY_DOMAIN            "example.com"
   ensure_kv KEYCLOAK_REALM           "aiop"
+  ensure_kv KEYCLOAK_GROUP_PREFIX    "aiop"
   ensure_kv KEYCLOAK_ADMIN           "admin"
   ensure_kv KEYCLOAK_ADMIN_PASSWORD  "$(hexn 16)"
   ensure_kv KEYCLOAK_DB_PASSWORD     "$(hexn 16)"
