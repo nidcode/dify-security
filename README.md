@@ -200,11 +200,51 @@ cd - && rm -rf dify/instances/teamC   # 複製フォルダごと完全削除
 
 4. 同様に `claude-opus-4-8` / `claude-haiku-4-5` / `local-llama` を追加 (Model Name のみ変更)
 
+> **既定でブロック**: OpenAI / Anthropic / Google (Gemini・Vertex) / Azure OpenAI / AWS Bedrock 等
+> 主要モデルプロバイダの API へ Dify から**直接**到達することは既定でブロックされています
+> (`model_egress_guard`、後述)。管理画面のモデルプロバイダ設定にうっかり生の API キーを
+> 入れてしまっても、この統制 (LiteLLM 経由) を迂回できません。
+
 > **重要**: エンドポイントは `http://host.docker.internal:4000/v1`。Dify はコンテナ内から
 > ホスト上の LiteLLM を呼ぶため `localhost` では届きません。override が
 > `host.docker.internal → host-gateway(既定 172.17.0.1)` を解決し、LiteLLM もそのIPに
 > バインドしているのでこの URL のまま動きます。docker0 のサブネットを変更している場合のみ
 > `.env` の `LITELLM_HOST` をそのゲートウェイIPに合わせてください (トラブルシュート参照)。
+
+### モデルプロバイダへの直接到達を遮断 (`model_egress_guard`、既定有効)
+
+Dify のモデルプロバイダプラグインは **plugin_daemon コンテナ内で実行され、実際の外部 API
+呼び出しもそこから発信されます** (api/worker は plugin_daemon への内部呼び出しのみ)。
+そこで plugin_daemon の `HTTP_PROXY`/`HTTPS_PROXY` を専用のフォワードプロキシ
+`model_egress_guard` (squid) に向け、主要モデルプロバイダのドメインへの CONNECT/HTTP を
+拒否しています (`http_access deny` で 403)。それ以外の通信 (marketplace からのプラグイン
+インストール、OAuth、ツールプラグインが使う任意の外部API等) は既定許可のままです。
+LiteLLM への経路 (`host.docker.internal:4000`) は `NO_PROXY` で除外済みのため、
+接続設定 A の手順どおり動作します。
+
+> **拒否ルール(ブロックリスト)であり、許可ルール(アローリスト)ではない**:
+> `model_egress_guard` は「既定許可・主要プロバイダのみ明示的に拒否」というポリシーです。
+> これは sandbox 用の `ssrf_proxy`(「既定拒否・`marketplace.dify.ai` のみ明示的に許可」の
+> **許可ルール**)とは逆方向の設計です。plugin_daemon には ssrf_proxy と同じ許可ルールを
+> 適用しなかった理由は、Tavily などツールプラグインが使う無数の外部APIドメインを
+> 個別に許可リスト登録しない限り軒並みブロックされてしまうため。「主要モデルプロバイダ
+> だけを塞ぎ、それ以外の正当な通信は妨げない」目的にはブロックリスト方式が適しています。
+
+- **既定拒否ドメイン**: `dify/model-egress-guard/blocked-model-providers.txt`
+  (OpenAI / Anthropic / Google Gemini・Vertex / Azure OpenAI / AWS Bedrock / Cohere /
+  Mistral / Groq / Perplexity / Together AI / Fireworks / DeepSeek / xAI / Replicate /
+  Hugging Face Inference / NVIDIA NIM)。編集後は
+  `docker compose restart model_egress_guard` で反映 (squid は起動時に一度だけ読み込む)。
+- **動作確認**: Dify コンテナ内 (例 `docker compose exec plugin_daemon sh`) から
+  `curl -x http://model_egress_guard:3129 https://api.openai.com/` が **403** になり、
+  他ドメインへの到達は通ることを確認できます。
+- **既知の限界**: ドメイン名 (CONNECT 先ホスト名 / SNI) ベースの遮断です。IP アドレス
+  直指定や、plugin_daemon 内コードが `HTTP_PROXY` を無視して能動的に迂回するケースは
+  防げません。あくまで「統制の迂回になりうる直接キー投入」を既定で塞ぐためのもので、
+  悪意ある内部コードへの耐性は想定していません (運用者は信頼境界内という前提)。
+- **無効化したい場合**: `dify/compose.override.yaml` の `plugin_daemon.environment` から
+  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` (大小両方) を削除し、`model_egress_guard`
+  サービス定義ごと削除してください (`docker compose up -d` で反映)。
 
 ### B. 埋め込み (Vertex AI Gemini + ADC) ★APIキー不要
 
@@ -294,6 +334,9 @@ curl -X POST http://localhost:4000/key/generate \
 
 - [ ] **ネットワーク分離 (実装済)**: Dify は共有網を持たず host-gateway 経由で LiteLLM に到達。
       インスタンス間は相互到達不可。LiteLLM は `172.17.0.1:4000` (bridge gateway) のみ公開 = LAN非公開。
+- [ ] **モデルプロバイダ直接到達の遮断 (実装済)**: `model_egress_guard` が plugin_daemon から
+      OpenAI/Anthropic/Google/Azure OpenAI/Bedrock 等**主要プロバイダへの直接到達を既定拒否**。
+      LiteLLM の統制 (仮想キー/予算/レート) を迂回できない。詳細は「接続設定」節参照。
 - [ ] **インスタンス機密の個別化 (実装済)**: `dify-new` が DB/Redis/Sandbox/Plugin/SECRET/INIT を
       再生成し `.env` を `chmod 600`。既知デフォルト(`difyai123456`/`dify-sandbox`)は残らない。
 - [ ] **TLS / リバースプロキシ + EntraID 認証 (実装あり)**: `compose.gateway.yaml` + `gateway/` に
@@ -397,6 +440,7 @@ aiop/
 ├── gateway/                  # 前段の設定 (nginx/certs/instances) + README。詳細は gateway/README.md
 ├── dify/
 │   ├── compose.override.yaml  # host-gateway 接続 + web起動順 override (全インスタンス共通)
+│   ├── model-egress-guard/   # 主要モデルプロバイダ直接到達を拒否する squid (全インスタンス共通)
 │   ├── docker/               # 公式 Dify 一式 = 複製元テンプレ (追跡。ただし .env は除外)
 │   └── instances/            # ← make dify-new が作る複製 (各インスタンス, gitignore)
 │       ├── teamA/            #     公式 docker/ の複製 + .env (port 8081, 機密個別)

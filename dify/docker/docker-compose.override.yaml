@@ -10,11 +10,28 @@
 #     host.docker.internal:host-gateway を各サービスに解決させ、
 #     Dify 管理画面の API Base = http://host.docker.internal:4000/v1 とする。
 #     LiteLLM 側はホスト loopback (127.0.0.1:4000) にのみ公開。
+#
+# セキュリティ方針 (モデルプロバイダの直接到達を既定で遮断):
+#   Dify のモデルプロバイダプラグインは plugin_daemon コンテナ内で実行され、
+#   実際の外部 API 呼び出しもそこから発信される (api/worker は plugin_daemon
+#   への内部呼び出しのみで、外部プロバイダには直接到達しない)。
+#   管理画面でうっかり OpenAI/Anthropic 等に生キーを設定しても LiteLLM の
+#   統制(仮想キー/予算/レート/監査)を迂回できないよう、plugin_daemon の
+#   HTTP_PROXY/HTTPS_PROXY を model_egress_guard (既定許可・主要プロバイダのみ
+#   拒否のフォワードプロキシ) に向ける。NO_PROXY で内部サービスと
+#   host.docker.internal (LiteLLM への正規経路) は素通しする。
+#   ブロック対象は dify/model-egress-guard/blocked-model-providers.txt を参照。
 # =============================================================================
 services:
   api:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # dify-new.sh は EXPOSE_PLUGIN_DEBUGGING_PORT を "127.0.0.1:" にして 5003 の固定/LAN 公開を
+    # 避ける。しかし公式 compose は同じ変数を PLUGIN_REMOTE_INSTALL_PORT(整数の設定値) にも流用する
+    # ため、api の設定バリデーションが "127.0.0.1:" を整数解釈できず起動不能になる。
+    # remote plugin install はこの構成で未使用なので、整数に固定して両立させる。
+    environment:
+      PLUGIN_REMOTE_INSTALL_PORT: "5003"
   api_websocket:
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -27,6 +44,34 @@ services:
   plugin_daemon:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      HTTP_PROXY: http://model_egress_guard:3129
+      HTTPS_PROXY: http://model_egress_guard:3129
+      http_proxy: http://model_egress_guard:3129
+      https_proxy: http://model_egress_guard:3129
+      NO_PROXY: "localhost,127.0.0.1,api,worker,worker_beat,db_postgres,db_mysql,redis,host.docker.internal"
+      no_proxy: "localhost,127.0.0.1,api,worker,worker_beat,db_postgres,db_mysql,redis,host.docker.internal"
+
+  # 主要モデルプロバイダへの直接到達のみを拒否するフォワードプロキシ。
+  # 既定拒否の ssrf_proxy (sandbox 用) とは別物 — 詳細は squid.conf.template 冒頭のコメント参照。
+  model_egress_guard:
+    image: ubuntu/squid:latest
+    restart: always
+    volumes:
+      - ./model-egress-guard/squid.conf.template:/etc/squid/squid.conf.template
+      - ./model-egress-guard/blocked-model-providers.txt:/etc/squid/blocked-model-providers.txt
+      - ./model-egress-guard/docker-entrypoint.sh:/docker-entrypoint-mount.sh
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "cp /docker-entrypoint-mount.sh /docker-entrypoint.sh && sed -i 's/\r$$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh && /docker-entrypoint.sh",
+      ]
+    environment:
+      HTTP_PORT: "3129"
+      COREDUMP_DIR: /var/spool/squid
+    networks:
+      - default
 
   # 起動タイミング問題の対策: web は api が healthy になってから起動させる。
   # (これがないと web が api/DB 準備前にリクエストを受け、初回アクセスで

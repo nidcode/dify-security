@@ -1,0 +1,70 @@
+# =============================================================================
+# model_egress_guard がブロックする「主要モデルプロバイダ」のドメイン一覧。
+# squid の `dstdom_regex -i` で読み込む正規表現 (1行1パターン、# はコメント)。
+#
+# 目的: plugin_daemon (Dify のモデルプロバイダプラグインが実際に外部発信する
+#       コンテナ) から各社 LLM API への「直接」到達を遮断し、LiteLLM
+#       (host.docker.internal:4000, NO_PROXY で除外済み) 経由を強制する。
+#       これにより Dify のモデルプロバイダ設定に生キーを入れてしまっても
+#       統制(仮想キー/予算/レート/監査)を迂回できない。
+#
+# 反映: このファイルを編集したら `docker compose restart model_egress_guard`
+#       (squid はコンテナ起動時に一度だけ読み込む)。
+#
+# 既知の限界: ドメイン名ベースの遮断 (CONNECT 先ホスト名 / SNI) であり、
+#       IPアドレス直指定での接続までは防げない。あくまで「デフォルト設定
+#       ミス・直接キー投入による統制迂回」を防ぐものであり、悪意ある
+#       plugin_daemon 内コードによる能動的回避への耐性は想定していない
+#       (脅威モデル: シェル/管理は信頼境界内)。
+# =============================================================================
+
+# ---- OpenAI ----
+^([a-z0-9-]+\.)*openai\.com$
+^([a-z0-9-]+\.)*chatgpt\.com$
+
+# ---- Anthropic ----
+^([a-z0-9-]+\.)*anthropic\.com$
+
+# ---- Google (Gemini API / Vertex AI) ----
+^generativelanguage\.googleapis\.com$
+^([a-z0-9-]+-)?aiplatform\.googleapis\.com$
+
+# ---- Azure OpenAI / Azure AI ----
+^([a-z0-9-]+\.)*openai\.azure\.com$
+^([a-z0-9-]+\.)*cognitiveservices\.azure\.com$
+
+# ---- AWS Bedrock (S3 等の他 AWS サービスは対象外) ----
+^bedrock(-runtime|-agent|-agent-runtime)?\.[a-z0-9-]+\.amazonaws\.com$
+
+# ---- Cohere ----
+^api\.cohere\.(ai|com)$
+
+# ---- Mistral ----
+^api\.mistral\.ai$
+
+# ---- Groq ----
+^api\.groq\.com$
+
+# ---- Perplexity ----
+^api\.perplexity\.ai$
+
+# ---- Together AI ----
+^api\.together\.(ai|xyz)$
+
+# ---- Fireworks AI ----
+^api\.fireworks\.ai$
+
+# ---- DeepSeek ----
+^api\.deepseek\.com$
+
+# ---- xAI (Grok) ----
+^api\.x\.ai$
+
+# ---- Replicate ----
+^api\.replicate\.com$
+
+# ---- Hugging Face Inference API ----
+^api-inference\.huggingface\.co$
+
+# ---- NVIDIA NIM ----
+^integrate\.api\.nvidia\.com$
