@@ -95,11 +95,11 @@ ISSUER_URI="https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}"
 # (ホストから直接 curl しても localhost:8080 は届かない/別プロセスに当たる)。
 TOKEN_URL_INTERNAL="http://localhost:8080/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token"
 JWKS_URL_INTERNAL="http://localhost:8080/realms/${KEYCLOAK_REALM}/protocol/openid-connect/certs"
-# client_credentials のリクエストボディと Content-Length を先に計算しておく
-# (コンテナ内に curl が無いため、下の実行例では bash の /dev/tcp で生の HTTP を組み立てる)。
-TOKEN_BODY="grant_type=client_credentials&client_id=${CLIENT}&client_secret=${CLIENT_SECRET}"
-TOKEN_BODY_LEN="${#TOKEN_BODY}"
-cat > "$OUTFILE" <<EOF
+# umask をサブシェル内だけ制限し、cat による新規作成時点から 0600 にする
+# (作成直後に chmod するだけだと、その間だけ既定umaskの緩いパーミッションで露出する窓ができる)。
+(
+  umask 077
+  cat > "$OUTFILE" <<EOF
 # 生成物 (scripts/gateway-wif-client.sh)。client secret を含むため .gitignore 済み・chmod 600。
 KEYCLOAK_ISSUER_URI=${ISSUER_URI}
 # 以下2つは Keycloak コンテナの内部 localhost 宛パス。curl/wget/python3 が無いイメージなので
@@ -111,7 +111,8 @@ WIF_CLIENT_ID=${CLIENT}
 WIF_CLIENT_SECRET=${CLIENT_SECRET}
 WIF_AUDIENCE=${AUDIENCE}
 EOF
-chmod 600 "$OUTFILE"
+)
+chmod 600 "$OUTFILE"   # umask漏れ・想定外の作成経路に備えた保険 (通常は既に0600のはず)
 echo "✅ 出力: ${OUTFILE}"
 
 cat <<EOF
@@ -139,12 +140,9 @@ GCP 側でこの値を使う (前回提示した手順の変数と対応):
     → gcloud ... providers create-oidc ... --jwk-json-path=gateway/wif/${CLIENT}-jwks.json
   ※ Keycloak の署名鍵ローテーション時は再取得・再登録が必要 (自動フェッチ方式ならこの手間は不要)。
 
-疎通確認 (client_credentials で実際にトークンが取れるか。curl不在+ポート非公開のため /dev/tcp 経由):
-  ${GW} exec -T keycloak bash -c '
-  exec 3<>/dev/tcp/localhost/8080
-  printf "POST /realms/${KEYCLOAK_REALM}/protocol/openid-connect/token HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${TOKEN_BODY_LEN}\r\n\r\n${TOKEN_BODY}" >&3
-  cat <&3
-  ' | tr -d '\r' | awk 'BEGIN{body=0} /^$/ && body==0 {body=1; next} body{print}' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"][:40], "...")'
+疎通確認 (client_credentials で実際にトークンが取れるか):
+  bash scripts/gateway-wif-refresh-token.sh ${CLIENT}
+  (${OUTFILE} からシークレットを読んで叩くだけなので、この画面にも他のログにも
+   client secret 自体は出力されない。成功すると gateway/wif/keycloak-token.jwt が更新される)
 ────────────────────────────────────────────────────────────────
 EOF
