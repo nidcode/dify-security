@@ -14,7 +14,8 @@ LITELLM := docker compose -p aiop-litellm --env-file .env -f compose.litellm.yam
 INSTANCES := $(notdir $(wildcard dify/instances/*))
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test
+.PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test \
+        gateway-up gateway-down gateway-ps gateway-logs
 
 help: ## このヘルプを表示
 	@echo "AIOP — Dify + LiteLLM"
@@ -58,6 +59,27 @@ logs: ## LiteLLM のログを追従
 
 pull: ## LiteLLM のイメージを最新に pull
 	-$(LITELLM) pull
+
+# --- Gateway スタック (front-nginx + Keycloak + oauth2-proxy) --------------
+# compose プロジェクト名 (aiop-gateway) と compose ファイル構成は
+# scripts/lib/gateway.sh に一元化。ここは scripts/gateway-compose.sh 経由で呼ぶだけ。
+# oauth2-proxy 群 (gateway/oauth2-proxies.gateway.yaml) は存在すれば自動で重なる。
+GATEWAY := bash scripts/gateway-compose.sh
+
+gateway-up: ## Gateway を起動 (nginx + Keycloak + oauth2-proxy)
+	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
+	@$(GATEWAY) up -d
+	@echo "✅ Gateway 起動。初回は 'bash scripts/gateway-keycloak-init.sh' を実行"
+
+gateway-down: ## Gateway を停止 (データは保持)
+	-@$(GATEWAY) down
+	@echo "✅ Gateway 停止 (Keycloak の DB は保持)。"
+
+gateway-ps: ## Gateway の状態
+	@$(GATEWAY) ps
+
+gateway-logs: ## Gateway のログを追従
+	@$(GATEWAY) logs -f --tail=100
 
 urls: ## アクセスURL一覧
 	@echo "LiteLLM 管理UI : http://localhost:4000/ui   (bind ${LITELLM_HOST:-172.17.0.1} / LAN非公開)"

@@ -48,10 +48,10 @@ GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 SAFE_VALUE="$(printf '%s' "$VALUE" | tr -c 'A-Za-z0-9._-' '_')"
 MAPPER="${GROUP}-from-${CLAIM}-${SAFE_VALUE}"
 
-GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
-KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
-KC config credentials --server http://localhost:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
+# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_require_up
+kc_login
 
 # 対象グループ (=インスタンス) の存在確認
 if ! KC get groups -r "$KEYCLOAK_REALM" --fields name --format csv 2>/dev/null | grep -qx "\"$GROUP\""; then

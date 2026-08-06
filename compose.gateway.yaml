@@ -10,8 +10,8 @@
 #         (/aiop-<team>) にマッピングする。「誰がどのチームか」は Keycloak で一元管理。
 #     - oauth2-proxy (チームごとに1個) = リクエスト経路上の門番。
 #         Keycloak の該当 client でログインさせ、--allowed-group=/aiop-<team> で認可。
-#         ※ サービス定義は scripts/gateway-add.sh が gateway/instances/<team>.gateway.yaml
-#           に生成する (このファイルには含めない)。
+#         ※ サービス定義は scripts/gateway-add.sh が gateway/oauth2-proxies.gateway.yaml
+#           に追記する (このファイルには含めない)。
 #     - front-nginx = 唯一の LAN 公開面 (443/80)。TLS 終端し、
 #         auth.<domain> → Keycloak、<team>.<domain> → 各 Dify インスタンス
 #         (host.docker.internal:<port>) へ、oauth2-proxy による auth_request 付きで振り分ける。
@@ -20,8 +20,10 @@
 #           各 Dify インスタンスへは host-gateway (host.docker.internal:<port>) 経由で到達し、
 #           既存の分離モデル (共有 docker 網なし) を維持する。
 #
-#   起動: make gateway-up   (= docker compose -p aiop-gateway --env-file .env
-#                              -f compose.gateway.yaml -f gateway/instances/*.gateway.yaml up -d)
+#   起動: make gateway-up
+#         (実体は scripts/gateway-compose.sh → scripts/lib/gateway.sh。
+#          project=aiop-gateway、gateway/oauth2-proxies.gateway.yaml があれば自動で重ねる)
+#   停止/状態/ログ: make gateway-down / gateway-ps / gateway-logs
 # =============================================================================
 
 services:

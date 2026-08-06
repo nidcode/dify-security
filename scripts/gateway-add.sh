@@ -49,12 +49,12 @@ if [[ -f "$AGG" ]] && grep -q "^  oauth2-proxy-${NAME}:" "$AGG"; then
   echo "❌ oauth2-proxy-${NAME} は既に $AGG に存在します"; exit 1
 fi
 
-GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
-KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_require_up
 
 echo "🔑 Keycloak にログイン ..."
-KC config credentials --server http://localhost:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
+kc_login
 
 # --- 1. グループ /aiop-<team> ---
 if KC get groups -r "$KEYCLOAK_REALM" --fields name --format csv 2>/dev/null | grep -qx "\"$GROUP\""; then
@@ -213,8 +213,7 @@ cat <<EOF
 ✅ チーム '${NAME}' を追加 (公開: https://${FQDN} → Dify :${PORT})
 
 反映 (oauth2-proxy-${NAME} を起動 + front-nginx をリロード):
-  docker compose -p aiop-gateway --env-file .env \\
-    -f compose.gateway.yaml -f gateway/oauth2-proxies.gateway.yaml up -d
+  make gateway-up
 
 チェック:
   - DNS: ${FQDN} を gateway ホストへ向ける (auth.${GATEWAY_DOMAIN} も)

@@ -4,8 +4,7 @@
 #   - realm ${KEYCLOAK_REALM} を作成
 #   - EntraID (Azure AD) を OIDC IdP としてブローカー登録
 #
-#   前提: Keycloak が起動していること:
-#           docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml up -d
+#   前提: Gateway (Keycloak) が起動していること: make gateway-up
 #         .env に KEYCLOAK_* / ENTRA_* / GATEWAY_DOMAIN / KEYCLOAK_REALM が設定済み。
 #
 #   使い方: bash scripts/gateway-keycloak-init.sh
@@ -24,18 +23,12 @@ set -a; . ./.env; set +a
 : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
 : "${ENTRA_TENANT_ID:?}"; : "${ENTRA_CLIENT_ID:?}"; : "${ENTRA_CLIENT_SECRET:?}"
 
-GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
-KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_require_up
 
-echo "⏳ Keycloak の起動を待機 (最大 ~120s) ..."
-for i in $(seq 1 40); do
-  if KC config credentials --server http://localhost:8080 \
-        --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1; then
-    echo "✅ Keycloak 管理APIに接続"; break
-  fi
-  [[ $i -eq 40 ]] && { echo "❌ Keycloak に接続できませんでした ('$GW logs keycloak' を確認)"; exit 1; }
-  sleep 3
-done
+# 初回は DB マイグレーション等で時間がかかるため長めに待つ (40回 x 3s = 最大 ~120s)。
+kc_login 40 3
 
 # --- realm ---
 if KC get "realms/${KEYCLOAK_REALM}" >/dev/null 2>&1; then

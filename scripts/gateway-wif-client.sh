@@ -29,7 +29,7 @@
 #     例: bash scripts/gateway-wif-client.sh litellm-vertex-wif \
 #           https://gcp-wif.dify-security.internal/litellm-vertex
 #
-#   前提: Gateway 起動済み + scripts/gateway-keycloak-init.sh 実行済み。
+#   前提: Gateway 起動済み (make gateway-up) + scripts/gateway-keycloak-init.sh 実行済み。
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -46,12 +46,12 @@ OUTDIR="gateway/wif"
 OUTFILE="${OUTDIR}/${CLIENT}.env"
 mkdir -p "$OUTDIR"
 
-GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
-KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_require_up
 
 echo "🔑 Keycloak にログイン ..."
-KC config credentials --server http://localhost:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
+kc_login
 
 # --- 既存チェック ---
 if KC get clients -r "$KEYCLOAK_REALM" -q "clientId=$CLIENT" --fields id --format csv 2>/dev/null | grep -q '"'; then
