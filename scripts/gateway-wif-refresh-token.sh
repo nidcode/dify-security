@@ -17,7 +17,8 @@
 #     */2 * * * * cd /path/to/dify-security && \
 #       bash scripts/gateway-wif-refresh-token.sh litellm-vertex-wif >> /var/log/gateway-wif-refresh.log 2>&1
 #
-#   前提: scripts/gateway-wif-client.sh 実行済み (gateway/wif/<client-id>.env が存在)。
+#   前提: Gateway 起動済み (make gateway-up) +
+#         scripts/gateway-wif-client.sh 実行済み (gateway/wif/<client-id>.env が存在)。
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -36,7 +37,10 @@ REALM_PATH="${KEYCLOAK_TOKEN_URL_INTERNAL#http://localhost:8080}"
 TOKEN_BODY="grant_type=client_credentials&client_id=${WIF_CLIENT_ID}&client_secret=${WIF_CLIENT_SECRET}"
 TOKEN_BODY_LEN="${#TOKEN_BODY}"
 
-GW="docker compose -p aiop-gateway --env-file .env -f compose.gateway.yaml"
+# compose 構成 / 起動前チェック は scripts/lib/gateway.sh に一元化。
+# cron 実行なので、未起動時は「なぜ失敗したか」がログに残ることが重要。
+. scripts/lib/gateway.sh
+gateway_require_up
 
 RESPONSE="$($GW exec -T keycloak bash -c "
 exec 3<>/dev/tcp/localhost/8080
