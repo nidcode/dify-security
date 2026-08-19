@@ -114,10 +114,17 @@ fi
 # になるため、現在のモードで作り直す (内容が同じなら書き換えられない = 再起動もされない)。
 for f in "$DIR"/team-*.conf.template; do
   [[ -e "$f" ]] || continue
-  sub="$(sed -n '1s/.* sub=\([^ ]*\) .*/\1/p' "$f")"
-  port="$(sed -n '1s/.*port=\([0-9]*\)$/\1/p' "$f")"
+  sub="$(sed -n '1s/.* sub=\([^ ]*\).*/\1/p' "$f")"
+  # 現行ヘッダ: "... sub=<sub> → Dify upstream=<host>:<port>"
+  up="$(sed -n '1s/.* upstream=\([^ :]*\):[0-9]*$/\1/p' "$f")"
+  port="$(sed -n '1s/.* upstream=[^ :]*:\([0-9]*\)$/\1/p' "$f")"
+  # 旧ヘッダ (upstream 導入前): "... sub=<sub> → Dify port=<port>" は既定ホストとして扱う。
+  if [[ -z "$up" ]]; then
+    port="$(sed -n '1s/.*port=\([0-9]*\)$/\1/p' "$f")"
+    up="$GATEWAY_DEFAULT_UPSTREAM_HOST"
+  fi
   if [[ -n "$sub" && -n "$port" ]]; then
-    gateway_render_passthrough_vhost "$sub" "$port" "$f"
+    gateway_render_passthrough_vhost "$sub" "$port" "$f" "$up"
   else
     echo "⚠ $f の先頭コメントから sub/port を読み戻せません。現在の GATEWAY_TLS=${GATEWAY_TLS} に"
     echo "   合っているか手動で確認してください (合っていないと 444 か証明書エラーになります)。"

@@ -18,16 +18,24 @@
 #       (この値はインスタンス固有の定数で、組織変更では触らない)。
 #
 #   使い方:
-#     bash scripts/gateway-add.sh <team> <dify-port> [subdomain] [entra_group/approle] [entra_claim=roles]
+#     bash scripts/gateway-add.sh <team> <dify-port|host:port> [subdomain] [entra_group/approle] [entra_claim=roles]
 #     例: bash scripts/gateway-add.sh teamA 8081 teamA aiop-teamA
+#
+#   第2引数は「Dify への到達先」。ポートだけなら gateway ホスト自身
+#   (host.docker.internal = host-gateway) の publish ポートを指す = 従来どおり。
+#   Dify が別ホストにある構成では <host>:<port> で指定する:
+#     bash scripts/gateway-add.sh dify01 dify01:8001
+#   ※ 指定したホスト名は front-nginx コンテナから解決できる必要がある。gateway ホストの
+#     DNS で引ければコンテナからも引ける。/etc/hosts にしか無い名前はコンテナに継承
+#     されないため、compose に extra_hosts を足すか IP で指定すること。
 #
 #   前提: Gateway 起動済み + scripts/gateway-keycloak-init.sh 実行済み。.env に GATEWAY_DOMAIN 等。
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NAME="${1:?usage: gateway-add.sh <name> <port> [subdomain] [entra_group] [entra_claim]}"
-PORT="${2:?usage: gateway-add.sh <name> <port> [subdomain] [entra_group] [entra_claim]}"
+NAME="${1:?usage: gateway-add.sh <name> <port|host:port> [subdomain] [entra_group] [entra_claim]}"
+PORT_ARG="${2:?usage: gateway-add.sh <name> <port|host:port> [subdomain] [entra_group] [entra_claim]}"
 SUB="${3:-$NAME}"
 ENTRA_GROUP="${4:-}"          # App ロール名 or EntraID グループ Object ID (任意)
 ENTRA_CLAIM="${5:-roles}"     # roles(App ロール) | groups(セキュリティグループ)
@@ -45,6 +53,10 @@ AGG="gateway/oauth2-proxies.gateway.yaml"
 # compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
 . scripts/lib/gateway.sh
 gateway_mode_init
+# 第2引数を <port> / <host>:<port> として解析 → UPSTREAM_HOST / UPSTREAM_PORT
+gateway_parse_upstream "$PORT_ARG"
+PORT="$UPSTREAM_PORT"
+gateway_warn_unresolvable_upstream "$UPSTREAM_HOST"
 # server ブロックの置き場はモードで変わる (SSO=リポジトリ管理 / 素通し=生成物)。
 NCONF="$(gateway_templates_dir)/team-${SUB}.conf.template"
 mkdir -p "$(dirname "$NCONF")"
@@ -182,7 +194,7 @@ fi
 # heredoc を含むためインデントは付けない (終端子が行頭でないと解釈されない)。
 if ! gateway_is_passthrough; then
 cat > "$NCONF" <<NGINX
-# 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify インスタンス port=${PORT}
+# 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify upstream=${UPSTREAM_HOST}:${PORT}
 # 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN} は起動時 envsubst。
 server {
     listen 443 ssl;
@@ -214,7 +226,7 @@ server {
     # X-Auth-* は nginx.conf の http{} で空にクリア済み = ここへ注入されても Dify へは渡らない。
     # /files をAPI取得する運用なら files を追加: ^/(v1|triggers|e|mcp|files)(/|\$)
     location ~ ^/(v1|triggers|e|mcp)(/|\$) {
-        proxy_pass http://host.docker.internal:${PORT};
+        proxy_pass http://${UPSTREAM_HOST}:${PORT};
     }
 
     # --- 対話系: EntraID/Keycloak で認可 (/aiop-${NAME} 所属者のみ) ---
@@ -236,7 +248,7 @@ server {
         # 認証済み ID は auth_request の結果のみ信頼 (クライアント送信値を上書き)。
         proxy_set_header X-Auth-User  \$auth_user;
         proxy_set_header X-Auth-Email \$auth_email;
-        proxy_pass http://host.docker.internal:${PORT};
+        proxy_pass http://${UPSTREAM_HOST}:${PORT};
     }
 }
 NGINX
@@ -246,15 +258,15 @@ else
 # vhost の生成は scripts/lib/gateway.sh の gateway_render_passthrough_vhost に一元化
 # (listen/ssl は GATEWAY_TLS 依存で焼き込まれるため、TLS モード変更時は
 #  gateway-render.sh が同じ関数で既存分を再生成する)。
-gateway_render_passthrough_vhost "$SUB" "$PORT" "$NCONF"
-echo "✅ 生成: $NCONF (素通し / TLS=${GATEWAY_TLS})"
+gateway_render_passthrough_vhost "$SUB" "$PORT" "$NCONF" "$UPSTREAM_HOST"
+echo "✅ 生成: $NCONF (素通し / TLS=${GATEWAY_TLS} / → ${UPSTREAM_HOST}:${PORT})"
 fi
 
 if gateway_is_passthrough; then
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────
-✅ チーム '${NAME}' を追加 (素通し: $( [[ "$GATEWAY_TLS" == terminate ]] && echo "https://${FQDN}" || echo "http://${FQDN} (前段で https 終端)" ) → Dify :${PORT})
+✅ チーム '${NAME}' を追加 (素通し: $( [[ "$GATEWAY_TLS" == terminate ]] && echo "https://${FQDN}" || echo "http://${FQDN} (前段で https 終端)" ) → Dify ${UPSTREAM_HOST}:${PORT})
 
 ⚠ このインスタンスは認証なしで公開されます。front-nginx に到達できる人は
   全員 Dify を開けます。閉じた網に置くか、前段で認証してください。
@@ -272,14 +284,14 @@ cat <<EOF
 
 後で認証を有効にする場合: .env の GATEWAY_AUTH=sso に戻し、
   rm $(gateway_templates_dir)/team-${SUB}.conf.template
-  bash scripts/gateway-add.sh ${NAME} ${PORT} ${SUB} [approle]
+  bash scripts/gateway-add.sh ${NAME} ${PORT_ARG} ${SUB} [approle]
 ────────────────────────────────────────────────────────────────
 EOF
 else
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────
-✅ チーム '${NAME}' を追加 (公開: https://${FQDN} → Dify :${PORT})
+✅ チーム '${NAME}' を追加 (公開: https://${FQDN} → Dify ${UPSTREAM_HOST}:${PORT})
 
 反映 (oauth2-proxy-${NAME} を起動 + front-nginx をリロード):
   make gateway-up

@@ -23,6 +23,52 @@ GATEWAY_PASSTHRU_TLS_FILE="compose.gateway-passthrough-tls.yaml"
 GATEWAY_PROXIES_FILE="gateway/oauth2-proxies.gateway.yaml"
 # front-nginx が参照する TLS 証明書 (compose の ./gateway/certs マウント配下)。
 GATEWAY_CERT_FILES=(gateway/certs/tls.crt gateway/certs/tls.key)
+# Dify インスタンスへの既定の到達先。gateway と同一ホストで Dify が動く構成では、
+# compose.gateway.yaml の extra_hosts (host.docker.internal:host-gateway) 経由で
+# ホストの publish ポートに届く。別ホストの Dify は gateway-add.sh に <host>:<port> を渡す。
+GATEWAY_DEFAULT_UPSTREAM_HOST="host.docker.internal"
+
+# upstream ホストが front-nginx コンテナから引けるかを確認する。
+# proxy_pass はリテラル = nginx 起動時に解決されるため、引けないと front-nginx が
+# 起動できず「全チームが落ちる」。追加時点で気付けるよう警告する (中断はしない:
+# これから DNS を用意する / まだ相手が居ない、という順序もあるため)。
+gateway_warn_unresolvable_upstream() {  # usage: <host>
+  local host="$1" cid
+  [[ "$host" == "$GATEWAY_DEFAULT_UPSTREAM_HOST" ]] && return 0   # extra_hosts で常に解決可
+  # IP リテラルは解決不要
+  [[ "$host" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && return 0
+  cid="$(gw_compose ps -q front-nginx 2>/dev/null || true)"
+  if [[ -n "$cid" ]]; then
+    # 実際に front-nginx の中から引けるかを見る (ホスト側で引けてもコンテナで引けるとは限らない)
+    docker exec "$cid" getent hosts "$host" >/dev/null 2>&1 && return 0
+    echo "⚠ front-nginx コンテナから '${host}' を解決できません。"
+  else
+    getent hosts "$host" >/dev/null 2>&1 && return 0
+    echo "⚠ このホストから '${host}' を解決できません (front-nginx 未起動のため代わりに確認)。"
+  fi
+  echo "   proxy_pass はリテラル指定 = nginx 起動時に解決されるため、このままだと"
+  echo "   front-nginx が起動できず全チームが落ちます。次のいずれかで解決可能にしてください:"
+  echo "     - 社内 DNS に ${host} を登録する (コンテナはホストの DNS を引きます)"
+  echo "     - compose.gateway.yaml の front-nginx に extra_hosts: \"${host}:<IP>\" を追加"
+  echo "     - ホスト名ではなく IP を指定する (例: gateway-add.sh <team> 192.168.x.y:<port>)"
+}
+
+# "<port>" または "<host>:<port>" を解析して UPSTREAM_HOST / UPSTREAM_PORT に入れる。
+# ホスト省略時は従来どおり gateway ホスト自身を指す (既存の呼び出しは挙動不変)。
+gateway_parse_upstream() {  # usage: gateway_parse_upstream <port|host:port>
+  local arg="${1:?}"
+  if [[ "$arg" == *:* ]]; then
+    UPSTREAM_HOST="${arg%:*}"
+    UPSTREAM_PORT="${arg##*:}"
+  else
+    UPSTREAM_HOST="$GATEWAY_DEFAULT_UPSTREAM_HOST"
+    UPSTREAM_PORT="$arg"
+  fi
+  [[ -n "$UPSTREAM_HOST" ]] || { echo "❌ upstream ホストが空です (指定: '$arg')"; exit 1; }
+  [[ "$UPSTREAM_PORT" =~ ^[0-9]+$ ]] || {
+    echo "❌ ポートが数値ではありません: '${UPSTREAM_PORT}' (指定: '$arg')"
+    echo "   指定は <port> または <host>:<port> (例: 8081 / dify01:8001)"; exit 1; }
+}
 
 # --- 動作モード (.env の GATEWAY_AUTH / GATEWAY_TLS) ---------------------------
 # 既定は従来どおり sso + terminate。値の検証もここに集約し、各スクリプトは
@@ -80,6 +126,29 @@ gw_compose() {
 # kcadm.sh の呼び出し (Keycloak コンテナ内で実行)。
 KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
 
+# up の引数から「front-nginx が起動対象か」を判定する。
+#   compose は サービス無指定 = 全サービス、指定あり = そのサービスのみ。
+#   front-nginx を狙っていない up (例: up -d keycloak) で front-nginx の設定検証や
+#   再作成まで走らせると、証明書欠落や upstream 未解決で Keycloak だけの起動・保守が
+#   できなくなる (証明書欠落時に Keycloak は起動させる、という既存の方針とも矛盾する)。
+gateway_up_targets_front_nginx() {  # usage: <compose の引数...> (先頭は up)
+  local a skip=0 services=()
+  shift || true   # "up" を捨てる
+  for a in "$@"; do
+    if [[ $skip == 1 ]]; then skip=0; continue; fi
+    case "$a" in
+      # 値を伴うオプション: 次の引数はサービス名ではない
+      --scale|--timeout|-t|--exit-code-from|--attach|--no-attach|--pull|--wait-timeout)
+        skip=1; continue ;;
+      -*) continue ;;
+    esac
+    services+=("$a")
+  done
+  [[ ${#services[@]} -eq 0 ]] && return 0        # 無指定 = 全部 = front-nginx を含む
+  local s; for s in "${services[@]}"; do [[ "$s" == "front-nginx" ]] && return 0; done
+  return 1
+}
+
 # --- 起動前チェック -----------------------------------------------------------
 # docker compose exec は未起動時に `service "keycloak" is not running` としか言わず、
 # 何をすれば復旧するのか分からない。原因を切り分けて復旧コマンドまで案内する。
@@ -125,12 +194,19 @@ gateway_require_up() {
 
 # front-nginx は tls.crt/tls.key が無いと起動できずクラッシュループする。
 # up の前に気付けるよう警告する (Keycloak だけ使う検証もあるので中断はしない)。
-gateway_warn_missing_certs() {
-  # 前段で TLS 終端する構成 (GATEWAY_TLS=none) では front-nginx は 443 を持たない。
+# front-nginx が必要とする証明書が揃っているか。前段終端 (GATEWAY_TLS=none) では
+# 443 を持たないので常に「揃っている」扱い。警告と設定検証のゲートで共用する。
+gateway_certs_ready() {
   [[ "${GATEWAY_TLS:-terminate}" == "terminate" ]] || return 0
+  local f
+  for f in "${GATEWAY_CERT_FILES[@]}"; do [[ -f "$f" ]] || return 1; done
+  return 0
+}
+
+gateway_warn_missing_certs() {
+  gateway_certs_ready && return 0
   local f missing=()
   for f in "${GATEWAY_CERT_FILES[@]}"; do [[ -f "$f" ]] || missing+=("$f"); done
-  [[ ${#missing[@]} -eq 0 ]] && return 0
   echo "⚠ TLS 証明書がありません: ${missing[*]}"
   echo "   front-nginx は起動に失敗します (Keycloak 等は起動します)。"
   echo "   ワイルドカード証明書を上記の名前で配置してから 'make gateway-up' を再実行してください。"
@@ -172,8 +248,14 @@ _gateway_write_if_changed() {  # usage: _gateway_write_if_changed <dst> <<EOF ..
 # gateway-add.sh (新規作成) と gateway-render.sh (TLS モード変更時の再生成) で共用する
 # 唯一の生成箇所。listen/ssl は GATEWAY_TLS に依存して焼き込まれるため、モード変更時は
 # gateway-render.sh が先頭コメントの sub=/port= を読み戻して本関数で作り直す。
-gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile>
-  local sub="$1" port="$2" outfile="$3"
+gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile> [upstream_host]
+  local sub="$1" port="$2" outfile="$3" up="${4:-$GATEWAY_DEFAULT_UPSTREAM_HOST}"
+  # proxy_pass は upstream ホストをリテラルで書く (変数 + resolver にはしない)。
+  # 変数方式は nginx 独自の resolver を使うため /etc/hosts を参照せず、docker の
+  # 埋め込み DNS (127.0.0.11) はユーザー定義ネットワークでは extra_hosts のエントリを
+  # NXDOMAIN で返す = 既定の host.docker.internal が引けなくなる (実測)。
+  # リテラルなら libc 解決になり /etc/hosts と DNS の両方が効く。代償として、
+  # 名前を引けないと nginx が起動できないため、gateway-add.sh が事前に警告する。
   if [[ "${GATEWAY_TLS:-terminate}" == "terminate" ]]; then
     # 自前終端: 実体は FQDN の 443 に置く。短縮名 (単一ラベル) は公的 CA が証明書を
     # 発行できず、ワイルドカード *.<domain> にも含まれないため https では張れない。
@@ -181,7 +263,7 @@ gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile>
     # これをせずに短縮名を 443 に載せると、既定の redirect (00-redirect.conf) が
     # http://<sub>/ → https://<sub>/ へ飛ばした先で証明書エラーになり到達できない。
     _gateway_write_if_changed "$outfile" <<NGINX
-# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=terminate) sub=${sub} → Dify port=${port}
+# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=terminate) sub=${sub} → Dify upstream=${up}:${port}
 # 認証なしの素通し。到達できる人は全員この Dify を開ける。
 # 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
 # TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
@@ -204,7 +286,7 @@ server {
     ssl_certificate_key /etc/nginx/certs/tls.key;
 
     location / {
-        proxy_pass http://host.docker.internal:${port};
+        proxy_pass http://${up}:${port};
     }
 }
 NGINX
@@ -212,7 +294,7 @@ NGINX
     # 前段終端: ここは平文 80 で受けるだけで証明書を提示しないため、単一ラベル名でも
     # 問題にならない。閉域 LAN で多い短縮名アクセスをそのまま処理する。
     _gateway_write_if_changed "$outfile" <<NGINX
-# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=none) sub=${sub} → Dify port=${port}
+# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=none) sub=${sub} → Dify upstream=${up}:${port}
 # 認証なしの素通し。到達できる人は全員この Dify を開ける。
 # 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
 # TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
@@ -222,7 +304,7 @@ server {
     server_name ${sub}.\${GATEWAY_DOMAIN} ${sub};
 
     location / {
-        proxy_pass http://host.docker.internal:${port};
+        proxy_pass http://${up}:${port};
     }
 }
 NGINX
@@ -263,6 +345,44 @@ gateway_reload_nginx_if_stale() {
   # 起動時刻より新しい *.template があるか (find -newermt は ISO8601 を解釈できる)
   newest="$(find "$dir" -name '*.conf.template' -newermt "$started" -print -quit 2>/dev/null || true)"
   [[ -n "$newest" ]] || return 0
-  echo "♻ テンプレート更新を検出 → front-nginx を再起動して反映します"
-  docker restart "$cid" >/dev/null
+  echo "♻ テンプレート更新を検出 → front-nginx を作り直して反映します"
+  # restart ではなく作り直す。envsubst は起動時に conf.d へ書き出すだけで、削除された
+  # テンプレートに対応する古い .conf を消さない (conf.d はマウントではなくコンテナ内)。
+  # restart だとチームを削除しても その vhost が残り続ける【実測】。
+  gw_compose up -d --force-recreate --no-deps front-nginx >/dev/null 2>&1
+}
+
+# --- 起動後の設定エラー検出 -----------------------------------------------------
+# proxy_pass のホストを引けないと nginx は [emerg] で起動できず、restart: always の
+# ためクラッシュループになる。この時 front-nginx 全体 = 全チームが落ちるので、
+# 「up は成功したのにアクセスできない」を黙って通さず、原因行を出して知らせる。
+# 反映前に front-nginx の設定を検証する。使い捨てコンテナで nginx -t を回すので、
+# 稼働中の front-nginx には触れない = 設定ミスで動いているゲートウェイを落とさない。
+# (状態サンプリングでの事後検出は不可: nginx イメージは entrypoint の envsubst 中も
+#  status=running のため、クラッシュループでも running に見える時間が長い【実測】)
+# proxy_pass のホストはリテラル = 起動時解決なので、名前を引けないかもここで分かる。
+gateway_check_nginx_config() {
+  local out
+  out="$(gw_compose run --rm --no-deps -T front-nginx nginx -t 2>&1)" && return 0
+  local emerg; emerg="$(grep -m1 '\[emerg\]' <<<"$out" || true)"
+  if [[ -z "$emerg" ]]; then
+    # nginx -t まで到達できなかった (イメージ取得失敗・network 不整合など)。
+    # 「検証できないこと」を理由に up を止めると、設定は正しいのに何も反映できなくなる。
+    # 検証はあくまで安全網なので、実行不能なら警告に留めて続行する。
+    echo "⚠ 設定検証を実行できませんでした (検証をスキップして続行します):"
+    printf '   %s\n' "$(tail -2 <<<"$out")"
+    return 0
+  fi
+  echo "❌ front-nginx の設定にエラーがあります (反映を中止しました / 現在の稼働構成は維持):"
+  # [emerg] はパターンでは文字クラス扱いになるためエスケープする
+  # (${emerg#*[emerg] } と書くと理由部分まで削れる)。
+  echo "   ${emerg#*\[emerg\] }"
+  if [[ "$emerg" == *"host not found in upstream"* ]]; then
+    local badhost; badhost="$(sed -n 's/.*host not found in upstream "\([^"]*\)".*/\1/p' <<<"$emerg")"
+    echo "   → '${badhost}' を front-nginx コンテナから解決できません。次のいずれかで対処:"
+    echo "     - 社内 DNS に ${badhost} を登録する (コンテナはホストの DNS を引きます)"
+    echo "     - compose.gateway.yaml の front-nginx に extra_hosts: \"${badhost}:<IP>\" を追加"
+    echo "     - 該当チームを IP 指定で作り直す (gateway-add.sh <team> <IP>:<port>)"
+  fi
+  return 1
 }

@@ -60,6 +60,20 @@ make gateway-up                              # front-nginx だけ起動
     単一ラベル名は公的 CA が証明書を発行できず、ワイルドカード `*.<domain>` にも含まれない
     ため https では張れない。**301 先を解決するには `<sub>.<domain>` が DNS で引ける必要がある**
     (社内 DNS の検索ドメイン等)。`https://dify01/` を直接開いた場合は 444 で拒否。
+- **Dify が別ホストにある場合**は、ポートの代わりに `<host>:<port>` を渡す
+  (SSO モードでも同じ):
+  ```bash
+  bash scripts/gateway-add.sh dify01 dify01:8001    # → http://dify01:8001 へ中継
+  bash scripts/gateway-add.sh teamA 8081            # 省略時は従来どおり gateway ホスト自身
+  ```
+  指定したホスト名は **front-nginx コンテナから解決できる必要がある**。`proxy_pass` は
+  リテラル指定 = nginx 起動時に解決するため、引けないと front-nginx が起動できず
+  **全チームが落ちる**。`make gateway-up` は反映前に `nginx -t` で検証し、駄目なら
+  稼働中の構成を維持したまま中止する。解決手段は次のいずれか:
+  - 社内 DNS に登録する (コンテナはホストの DNS を引く)
+  - `compose.gateway.yaml` の front-nginx に `extra_hosts: "<host>:<IP>"` を追加
+    (ホストの `/etc/hosts` はコンテナに継承されない)
+  - ホスト名ではなく IP を指定する
 - 生成物は `gateway/nginx/passthrough/` (SSO 用の `gateway/nginx/templates/` とは別)。
   混在させると同じ `server_name` が二重定義になるためディレクトリを分けている。
 - **現状 `GATEWAY_AUTH=sso` と `GATEWAY_TLS=none` の組み合わせは未対応**
