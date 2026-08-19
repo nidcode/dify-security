@@ -34,28 +34,42 @@ ENTRA_CLAIM="${5:-roles}"     # roles(App ロール) | groups(セキュリティ
 
 [[ -f .env ]] || { echo "❌ .env がありません"; exit 1; }
 set -a; . ./.env; set +a
-: "${GATEWAY_DOMAIN:?}"; : "${KEYCLOAK_REALM:?}"
-: "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
-: "${OAUTH2_PROXY_COOKIE_SECRET:?}"
+: "${GATEWAY_DOMAIN:?}"
 
 FQDN="${SUB}.${GATEWAY_DOMAIN}"
 # グループ接頭辞は .env に一元化 (gateway-grant.sh と同じ値を見る必要がある)。
 GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 CLIENT="oauth2-proxy-${NAME}"
 AGG="gateway/oauth2-proxies.gateway.yaml"
-NCONF="gateway/nginx/templates/team-${SUB}.conf.template"
 
-if [[ -f "$AGG" ]] && grep -q "^  oauth2-proxy-${NAME}:" "$AGG"; then
-  echo "❌ oauth2-proxy-${NAME} は既に $AGG に存在します"; exit 1
+# compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_mode_init
+# server ブロックの置き場はモードで変わる (SSO=リポジトリ管理 / 素通し=生成物)。
+NCONF="$(gateway_templates_dir)/team-${SUB}.conf.template"
+mkdir -p "$(dirname "$NCONF")"
+
+if [[ -f "$NCONF" ]]; then
+  echo "❌ ${NCONF} は既に存在します (先に削除するか別の subdomain を指定)"; exit 1
 fi
 
-# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
-. scripts/lib/gateway.sh
-gateway_require_up
+if ! gateway_is_passthrough; then
+  # Keycloak / oauth2-proxy を使うのは SSO モードだけ = 必須 env もここで検査する。
+  : "${KEYCLOAK_REALM:?}"
+  : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
+  : "${OAUTH2_PROXY_COOKIE_SECRET:?}"
+  if [[ -f "$AGG" ]] && grep -q "^  oauth2-proxy-${NAME}:" "$AGG"; then
+    echo "❌ oauth2-proxy-${NAME} は既に $AGG に存在します"; exit 1
+  fi
+  gateway_require_up
+  echo "🔑 Keycloak にログイン ..."
+  kc_login
+fi
 
-echo "🔑 Keycloak にログイン ..."
-kc_login
-
+# --- Keycloak 側の作業 (グループ / client / EntraID 対応付け / oauth2-proxy 定義) ---
+# 素通しモード (GATEWAY_AUTH=none) は認証を行わないので一切作らない。
+# heredoc を含むためインデントは付けない (終端子が行頭でないと解釈されない)。
+if ! gateway_is_passthrough; then
 # --- 1. グループ /aiop-<team> ---
 if KC get groups -r "$KEYCLOAK_REALM" --fields name --format csv 2>/dev/null | grep -qx "\"$GROUP\""; then
   echo "ℹ グループ '$GROUP' は既に存在"
@@ -144,8 +158,11 @@ cat >> "$AGG" <<YAML
 YAML
 chmod 600 "$AGG"
 echo "✅ 追記: $AGG (oauth2-proxy-${NAME})"
+fi
 
 # --- 5. front-nginx server ブロック ---
+# heredoc を含むためインデントは付けない (終端子が行頭でないと解釈されない)。
+if ! gateway_is_passthrough; then
 cat > "$NCONF" <<NGINX
 # 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify インスタンス port=${PORT}
 # 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN} は起動時 envsubst。
@@ -193,9 +210,9 @@ server {
         proxy_set_header Host              \$host;
         proxy_set_header X-Real-IP         \$remote_addr;
         proxy_set_header X-Forwarded-For   \$remote_addr;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto \$fwd_proto;
         proxy_set_header X-Forwarded-Host  \$host;
-        proxy_set_header X-Forwarded-Port  443;
+        proxy_set_header X-Forwarded-Port  \$fwd_port;
         proxy_set_header Upgrade           \$http_upgrade;
         proxy_set_header Connection        \$connection_upgrade;
         # 認証済み ID は auth_request の結果のみ信頼 (クライアント送信値を上書き)。
@@ -206,7 +223,58 @@ server {
 }
 NGINX
 echo "✅ 生成: $NCONF"
+else
+# 素通し: auth_request も oauth2-proxy も挟まず Dify へ直接プロキシする。
+# listen は TLS モードで変わる (自前終端=443+証明書 / 前段終端=平文80)。
+if [[ "$GATEWAY_TLS" == "terminate" ]]; then
+  LISTEN=$'    listen 443 ssl;\n    http2 on;'
+  TLSCONF=$'\n    ssl_certificate     /etc/nginx/certs/tls.crt;\n    ssl_certificate_key /etc/nginx/certs/tls.key;'
+else
+  LISTEN='    listen 80;'
+  TLSCONF=''
+fi
+cat > "$NCONF" <<NGINX
+# 生成物 (scripts/gateway-add.sh / GATEWAY_AUTH=none) sub=${SUB} → Dify port=${PORT}
+# 認証なしの素通し。到達できる人は全員この Dify を開ける。
+# 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
+server {
+${LISTEN}
+    server_name ${SUB}.\${GATEWAY_DOMAIN};${TLSCONF}
 
+    location / {
+        proxy_pass http://host.docker.internal:${PORT};
+    }
+}
+NGINX
+echo "✅ 生成: $NCONF (素通し / TLS=${GATEWAY_TLS})"
+fi
+
+if gateway_is_passthrough; then
+cat <<EOF
+
+────────────────────────────────────────────────────────────────
+✅ チーム '${NAME}' を追加 (素通し: $( [[ "$GATEWAY_TLS" == terminate ]] && echo "https://${FQDN}" || echo "http://${FQDN} (前段で https 終端)" ) → Dify :${PORT})
+
+⚠ このインスタンスは認証なしで公開されます。front-nginx に到達できる人は
+  全員 Dify を開けます。閉じた網に置くか、前段で認証してください。
+
+反映 (front-nginx に読み込ませる):
+  make gateway-up
+
+チェック:
+  - DNS: ${FQDN} を gateway ホストへ向ける
+  - GATEWAY_TLS=${GATEWAY_TLS} $( [[ "$GATEWAY_TLS" == terminate ]] \
+      && echo "→ gateway/certs/tls.crt|key が必要" \
+      || echo "→ TLS は前段で終端。front-nginx は :${FRONT_HTTP_PORT:-80} で平文待ち受け" )
+  - Dify 側 .env (dify/instances/${NAME}/.env) の URL を公開ドメインに:
+      bash scripts/gateway-difyenv.sh ${NAME} ${SUB}
+
+後で認証を有効にする場合: .env の GATEWAY_AUTH=sso に戻し、
+  rm $(gateway_templates_dir)/team-${SUB}.conf.template
+  bash scripts/gateway-add.sh ${NAME} ${PORT} ${SUB} [approle]
+────────────────────────────────────────────────────────────────
+EOF
+else
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────
@@ -223,3 +291,4 @@ cat <<EOF
           (または Keycloak でユーザーを /${GROUP} に追加)
 ────────────────────────────────────────────────────────────────
 EOF
+fi

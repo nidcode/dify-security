@@ -1,0 +1,44 @@
+# =============================================================================
+# AIOP — Gateway 素通しモード overlay (GATEWAY_AUTH=none)
+#
+#   compose.gateway.yaml に重ねて、front-nginx を「認証なしの純粋なリバースプロキシ」
+#   に変える。Keycloak / keycloak-db / oauth2-proxy は起動しない。
+#
+#   用途:
+#     - TLS 終端と <team>.<domain> → Dify ポートの振り分けだけが欲しい構成
+#     - 前段 (別の nginx / ALB / Cloudflare 等) が既に認証を持っている構成
+#
+#   ⚠ このモードでは front-nginx に到達できる人は全員 Dify を開ける。
+#      閉じた網に置くか、前段で認証すること。
+#
+#   起動: .env に GATEWAY_AUTH=none を設定して make gateway-up
+#         (overlay の指定は scripts/lib/gateway.sh が行うので -f 手打ちは不要)
+# =============================================================================
+
+services:
+  front-nginx:
+    # Keycloak を起動しないので健全性待ちの依存を外す (!reset で depends_on を削除)。
+    depends_on: !reset {}
+    # 既定は 80 のみ公開 = 前段で TLS 終端する構成。自前終端する場合は
+    # compose.gateway-passthrough-tls.yaml が 443 と証明書を足す
+    # (!override で置換しないと compose.gateway.yaml の 443 が残り、
+    #  前段 nginx / ALB と同じホストで 443 を奪い合う)。
+    ports: !override
+      - "${FRONT_HTTP_PORT:-80}:80"
+    # server ブロックは素通し用の生成ディレクトリから読む。SSO 用の
+    # gateway/nginx/templates/ と混在させると同じ server_name が二重定義になる。
+    volumes: !override
+      - ./gateway/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/nginx/passthrough:/etc/nginx/templates:ro
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
+      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN"
+      NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
+
+  # 素通しでは Keycloak を一切使わない。profiles を付けて既定の up 対象から外す
+  # (services 定義自体は compose.gateway.yaml 側にあり override では消せないため、
+  #  「有効化されていない profile に属する = 起動されない」という形で無効化する)。
+  keycloak:
+    profiles: ["sso"]
+  keycloak-db:
+    profiles: ["sso"]

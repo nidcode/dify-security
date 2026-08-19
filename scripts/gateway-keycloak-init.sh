@@ -21,11 +21,31 @@ set -a; . ./.env; set +a
 : "${GATEWAY_DOMAIN:?GATEWAY_DOMAIN を .env に設定}"
 : "${KEYCLOAK_REALM:?KEYCLOAK_REALM を .env に設定}"
 : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
-: "${ENTRA_TENANT_ID:?}"; : "${ENTRA_CLIENT_ID:?}"; : "${ENTRA_CLIENT_SECRET:?}"
 
-# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
+# compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
 . scripts/lib/gateway.sh
 gateway_require_up
+
+if gateway_is_passthrough; then
+  echo "ℹ GATEWAY_AUTH=none (素通し) では Keycloak を使いません。初期化は不要です。"
+  echo "   認証を有効にするには .env の GATEWAY_AUTH=sso に戻してから再実行してください。"
+  exit 0
+fi
+
+# --- EntraID 設定の有無を判定 ---------------------------------------------
+# gen-env.sh は ENTRA_* に雛形値を書くため「空かどうか」では判定できない。
+# 雛形のまま (xxxxxxxx-... / CHANGE-ME-...) なら未設定として扱い、IdP 登録を飛ばす。
+# 未設定でも realm / グループ / client は作れるので、Keycloak ローカルユーザーで
+# ログインする構成としてゲートウェイは動作する。
+entra_configured() {
+  local v
+  for v in "${ENTRA_TENANT_ID:-}" "${ENTRA_CLIENT_ID:-}" "${ENTRA_CLIENT_SECRET:-}"; do
+    [[ -n "$v" ]] || return 1
+    [[ "$v" == CHANGE-ME* ]] && return 1
+    [[ "$v" =~ ^x+-x+-x+-x+-x+$ ]] && return 1
+  done
+  return 0
+}
 
 # 初回は DB マイグレーション等で時間がかかるため長めに待つ (40回 x 3s = 最大 ~120s)。
 kc_login 40 3
@@ -39,7 +59,13 @@ else
 fi
 
 # --- EntraID (Azure AD) を OIDC ブローカーとして登録 ---
-if KC get "identity-provider/instances/entraid" -r "${KEYCLOAK_REALM}" >/dev/null 2>&1; then
+if ! entra_configured; then
+  echo "⏭ ENTRA_* が未設定 (雛形値) のため IdP 'entraid' の登録をスキップしました。"
+  echo "   → Keycloak ローカルユーザーでログインする構成として動作します。"
+  echo "     ユーザー作成: Keycloak 管理UI (https://auth.${GATEWAY_DOMAIN}) > Users > Add user"
+  echo "     作成後 Groups タブで /<接頭辞>-<team> に Join させると当該インスタンスに入れます。"
+  echo "   → EntraID を使う場合は .env の ENTRA_* を実値にして本スクリプトを再実行してください。"
+elif KC get "identity-provider/instances/entraid" -r "${KEYCLOAK_REALM}" >/dev/null 2>&1; then
   echo "ℹ IdP 'entraid' は既に存在 (更新はスキップ)"
 else
   KC create identity-provider/instances -r "${KEYCLOAK_REALM}" \
@@ -62,6 +88,7 @@ else
   echo "✅ IdP 'entraid' を登録"
 fi
 
+if entra_configured; then
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────
@@ -82,3 +109,24 @@ cat <<EOF
    第4引数には 上の App ロール名 (または EntraID グループの Object ID) を渡す。
 ────────────────────────────────────────────────────────────────
 EOF
+else
+cat <<EOF
+
+────────────────────────────────────────────────────────────────
+✅ Keycloak 初期化完了 (realm=${KEYCLOAK_REALM}) / EntraID なし
+
+EntraID が未設定のため、ログインは Keycloak のローカルユーザーで行います。
+
+次にやること:
+1) チーム(=Dify インスタンス)ごとに公開範囲を作成:
+     bash scripts/gateway-add.sh teamA 8081
+2) 利用者を作る (Keycloak 管理UI: https://auth.${GATEWAY_DOMAIN}):
+     Users > Add user → Credentials タブでパスワード設定
+     → Groups タブで /${KEYCLOAK_GROUP_PREFIX:-aiop}-teamA に Join
+   これで https://teamA.${GATEWAY_DOMAIN} に入れます。
+
+後から EntraID に移行する場合は .env の ENTRA_* を実値にして本スクリプトを再実行
+(realm やグループは作り直さず、IdP 登録だけが追加されます)。
+────────────────────────────────────────────────────────────────
+EOF
+fi

@@ -30,6 +30,38 @@
 - oauth2-proxy の `--allowed-group=/aiop-<team>` は**インスタンス固有の定数**で、組織変更では触らない。
 - ユーザーの日常異動は **EntraID グループ (または App ロール) の割当変更だけ**で完結。
 
+## 動作モード (.env)
+
+既定は EntraID SSO + 自前 TLS 終端 (従来どおり)。用途に応じて 2 軸で切り替える。
+
+| 変数 | 値 | 意味 |
+|---|---|---|
+| `GATEWAY_AUTH` | `sso` (既定) | oauth2-proxy + Keycloak で認証/認可 |
+| | `none` | **認証なしで Dify へ素通し**。Keycloak / oauth2-proxy は起動しない |
+| `GATEWAY_TLS` | `terminate` (既定) | front-nginx が 443 で TLS 終端 (`gateway/certs/tls.crt|key` が必要) |
+| | `none` | TLS は前段 (別 nginx / ALB / Cloudflare 等) で終端済み。80 で平文待ち受け、443 は公開しない |
+
+`GATEWAY_AUTH=none` では front-nginx は「サブドメイン → Dify ポート」の振り分けだけを行う。
+
+```bash
+# .env: GATEWAY_AUTH=none / GATEWAY_TLS=none (前段で TLS 終端する場合)
+bash scripts/gateway-add.sh teamA 8081      # nginx の vhost だけ生成 (Keycloak 不使用)
+make gateway-up                              # front-nginx だけ起動
+```
+
+- **⚠ 認証は一切かからない。** front-nginx に到達できる人は全員その Dify を開ける。
+  閉じた網に置くか、前段で認証すること。
+- `GATEWAY_TLS=none` では `X-Forwarded-Proto` / `-Port` は前段の値をそのまま引き継ぐ
+  (= 前段を信頼する)。前段を経由せず直接 80 に届く経路が無いことが前提。
+- 生成物は `gateway/nginx/passthrough/` (SSO 用の `gateway/nginx/templates/` とは別)。
+  混在させると同じ `server_name` が二重定義になるためディレクトリを分けている。
+- **現状 `GATEWAY_AUTH=sso` と `GATEWAY_TLS=none` の組み合わせは未対応**
+  (oauth2-proxy / Keycloak が https 前提のため)。指定すると起動時に落とす。
+
+EntraID の設定 (`ENTRA_*`) が雛形値のままなら、`gateway-keycloak-init.sh` は
+IdP 登録をスキップして realm だけ作る。Keycloak ローカルユーザーでログインする
+構成としてそのまま使え、後から `ENTRA_*` を実値にして再実行すれば移行できる。
+
 ## 前提
 
 - 公開ドメイン (例 `example.com`) と DNS。`auth.<domain>` と各 `<team>.<domain>` を gateway ホストへ。

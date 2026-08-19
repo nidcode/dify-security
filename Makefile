@@ -69,7 +69,8 @@ GATEWAY := bash scripts/gateway-compose.sh
 gateway-up: ## Gateway を起動 (nginx + Keycloak + oauth2-proxy)
 	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
 	@$(GATEWAY) up -d
-	@echo "✅ Gateway 起動。初回は 'bash scripts/gateway-keycloak-init.sh' を実行"
+	@grep -qE '^GATEWAY_AUTH=none' .env \
+	  || echo "✅ Gateway 起動。初回は 'bash scripts/gateway-keycloak-init.sh' を実行"
 
 gateway-down: ## Gateway を停止 (データは保持)
 	-@$(GATEWAY) down

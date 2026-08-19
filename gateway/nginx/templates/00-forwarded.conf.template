@@ -1,0 +1,7 @@
+# X-Forwarded-Proto / Port の決め方。nginx.conf の http{} が $fwd_proto / $fwd_port を参照する。
+# SSO モードの front-nginx は常に最外エッジで TLS 終端するため https/443 に固定する
+# (クライアント送信の X-Forwarded-* を信頼すると Dify 側の絶対URL・secure cookie を詐称できる)。
+# ※ 素通しモード (GATEWAY_AUTH=none) では scripts/gateway-render.sh が
+#    gateway/nginx/passthrough/ に別の内容で生成する (前段終端に追従するため)。
+map $host $fwd_proto { default https; }
+map $host $fwd_port  { default 443; }
