@@ -173,28 +173,60 @@ _gateway_write_if_changed() {  # usage: _gateway_write_if_changed <dst> <<EOF ..
 # 唯一の生成箇所。listen/ssl は GATEWAY_TLS に依存して焼き込まれるため、モード変更時は
 # gateway-render.sh が先頭コメントの sub=/port= を読み戻して本関数で作り直す。
 gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile>
-  local sub="$1" port="$2" outfile="$3" listen tlsconf
+  local sub="$1" port="$2" outfile="$3"
   if [[ "${GATEWAY_TLS:-terminate}" == "terminate" ]]; then
-    listen=$'    listen 443 ssl;\n    http2 on;'
-    tlsconf=$'\n    ssl_certificate     /etc/nginx/certs/tls.crt;\n    ssl_certificate_key /etc/nginx/certs/tls.key;'
-  else
-    listen='    listen 80;'
-    tlsconf=''
-  fi
-  _gateway_write_if_changed "$outfile" <<NGINX
-# 生成物 (GATEWAY_AUTH=none) sub=${sub} → Dify port=${port}
+    # 自前終端: 実体は FQDN の 443 に置く。短縮名 (単一ラベル) は公的 CA が証明書を
+    # 発行できず、ワイルドカード *.<domain> にも含まれないため https では張れない。
+    # そこで短縮名は 80 で受けて FQDN の https へ寄せる (canonical redirect)。
+    # これをせずに短縮名を 443 に載せると、既定の redirect (00-redirect.conf) が
+    # http://<sub>/ → https://<sub>/ へ飛ばした先で証明書エラーになり到達できない。
+    _gateway_write_if_changed "$outfile" <<NGINX
+# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=terminate) sub=${sub} → Dify port=${port}
 # 認証なしの素通し。到達できる人は全員この Dify を開ける。
 # 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
 # TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
+
+# 短縮名 http://<sub>/ を FQDN の https へ寄せる。証明書が単一ラベル名を張れないため、
+# https://<sub>/ に飛ばすと証明書エラーになる。FQDN に正規化してから TLS を張らせる。
+# (301 先を解決するには <sub>.\${GATEWAY_DOMAIN} が DNS で引ける必要がある)
 server {
-${listen}
-    server_name ${sub}.\${GATEWAY_DOMAIN};${tlsconf}
+    listen 80;
+    server_name ${sub};
+    return 301 https://${sub}.\${GATEWAY_DOMAIN}\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${sub}.\${GATEWAY_DOMAIN};
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
 
     location / {
         proxy_pass http://host.docker.internal:${port};
     }
 }
 NGINX
+  else
+    # 前段終端: ここは平文 80 で受けるだけで証明書を提示しないため、単一ラベル名でも
+    # 問題にならない。閉域 LAN で多い短縮名アクセスをそのまま処理する。
+    _gateway_write_if_changed "$outfile" <<NGINX
+# 生成物 (GATEWAY_AUTH=none / GATEWAY_TLS=none) sub=${sub} → Dify port=${port}
+# 認証なしの素通し。到達できる人は全員この Dify を開ける。
+# 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
+# TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
+server {
+    listen 80;
+    # FQDN に加えて短縮ホスト名も受ける (未知の Host は引き続き 444)。
+    server_name ${sub}.\${GATEWAY_DOMAIN} ${sub};
+
+    location / {
+        proxy_pass http://host.docker.internal:${port};
+    }
+}
+NGINX
+  fi
 }
 
 # --- 素通しモードで残った認証系コンテナの撤去 -----------------------------------
