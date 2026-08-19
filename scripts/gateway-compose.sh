@@ -29,6 +29,9 @@ if [[ "$1" == "up" ]]; then
     bash scripts/gateway-render.sh
     echo "ℹ 素通しモード (GATEWAY_AUTH=none): Keycloak / oauth2-proxy は起動しません。"
   fi
+  # 反映前に設定を検証する。壊れた設定で up すると front-nginx がクラッシュループし、
+  # 全チームが落ちる (proxy_pass のホストを引けない等)。稼働中の構成は触らずに中止する。
+  gateway_check_nginx_config || exit 1
 fi
 
 # down は先に残骸を撤去する (SSO→素通し切替で残った keycloak 等がネットワークに
