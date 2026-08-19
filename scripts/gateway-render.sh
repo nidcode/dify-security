@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 素通しモード (GATEWAY_AUTH=none) の front-nginx 土台 server ブロックを書き出す。
+# 素通しモード (GATEWAY_AUTH=none) の front-nginx server ブロックを書き出す。
 #
 #   出力先: gateway/nginx/passthrough/ (生成物・.gitignore 済み)
-#     00-forwarded.conf.template    X-Forwarded-Proto/Port の決め方 (TLS モード依存)
+#     00-forwarded.conf.template    X-Forwarded-Proto/Port/For の決め方 (TLS モード依存)
 #     00-default-deny.conf.template server_name 不一致を 444 で拒否
 #     00-redirect.conf.template     http→https 恒久リダイレクト (自前終端のときだけ)
-#   チーム別の vhost (team-<sub>.conf.template) は scripts/gateway-add.sh が同じ場所に生成する。
+#     team-<sub>.conf.template      チーム別 vhost。新規は gateway-add.sh が作るが、
+#                                   listen/ssl が GATEWAY_TLS に依存して焼き込まれるため、
+#                                   ここで既存分も現在の TLS モードに合わせて再生成する
+#                                   (sub/port はファイル先頭コメントから読み戻す)。
+#
+#   書き出しは内容が変わったときだけ行う (_gateway_write_if_changed)。mtime だけ進むと
+#   make gateway-up のたびに front-nginx が再起動されてしまうため。
 #
 #   make gateway-up (scripts/gateway-compose.sh) が起動前に自動実行するので、
 #   通常は直接叩かなくてよい。.env の GATEWAY_TLS を変えた後に手で流してもよい。
@@ -26,18 +32,15 @@ gateway_is_passthrough || {
 DIR="$(gateway_templates_dir)"
 mkdir -p "$DIR"
 
-# --- X-Forwarded-Proto / Port -------------------------------------------------
-# nginx.conf の http{} は $fwd_proto / $fwd_port を参照する。どう決めるかはここで切り替える。
+# --- X-Forwarded-Proto / Port / For -------------------------------------------
+# nginx.conf の http{} は $fwd_proto / $fwd_port / $fwd_for を参照する。
 if [[ "$GATEWAY_TLS" == "terminate" ]]; then
-  cat > "$DIR/00-forwarded.conf.template" <<'NGINX'
-# 生成物 (scripts/gateway-render.sh) / GATEWAY_TLS=terminate
-# front-nginx 自身が最外エッジで TLS 終端する = クライアント送信の X-Forwarded-* は
-# 信頼せず https/443 に固定する (詐称による Dify 側の絶対URL・secure cookie 汚染を防ぐ)。
-map $host $fwd_proto { default https; }
-map $host $fwd_port  { default 443; }
-NGINX
+  # 自前終端 = 最外エッジ。SSO モードと同じ「https/443/実接続元に固定」なので、
+  # リポジトリ管理のテンプレートをそのまま使う (内容の二重管理をしない)。
+  _gateway_write_if_changed "$DIR/00-forwarded.conf.template" \
+    < gateway/nginx/templates/00-forwarded.conf.template
 else
-  cat > "$DIR/00-forwarded.conf.template" <<'NGINX'
+  _gateway_write_if_changed "$DIR/00-forwarded.conf.template" <<'NGINX'
 # 生成物 (scripts/gateway-render.sh) / GATEWAY_TLS=none
 # TLS は前段 (別 nginx / ALB / Cloudflare 等) で終端済み。前段が付けた X-Forwarded-* を
 # そのまま引き継ぐ。付いていなければ自分の待ち受け (平文 80) をそのまま反映する。
@@ -57,12 +60,15 @@ map $fwd_proto $fwd_port_by_proto {
     https   443;
     default $server_port;
 }
+# X-Forwarded-For は前段が付けたクライアント IP 連鎖に自ホップの接続元 (=前段の IP) を
+# 追記して引き継ぐ (前段が付けなければ実接続元のみ)。Proto/Port と同じく前段を信頼する。
+map $host $fwd_for { default $proxy_add_x_forwarded_for; }
 NGINX
 fi
 
 # --- 既定拒否 -----------------------------------------------------------------
 if [[ "$GATEWAY_TLS" == "terminate" ]]; then
-  cat > "$DIR/00-default-deny.conf.template" <<'NGINX'
+  _gateway_write_if_changed "$DIR/00-default-deny.conf.template" <<'NGINX'
 # 生成物 (scripts/gateway-render.sh) / GATEWAY_TLS=terminate
 # server_name にマッチしない Host/SNI が、最初にロードされた vhost へ落ちるのを防ぐ。
 # SNI 不一致時はこの default_server の証明書が提示されるため tls.crt/key を指定する。
@@ -77,7 +83,7 @@ server {
     return 444;
 }
 NGINX
-  cat > "$DIR/00-redirect.conf.template" <<'NGINX'
+  _gateway_write_if_changed "$DIR/00-redirect.conf.template" <<'NGINX'
 # 生成物 (scripts/gateway-render.sh) / GATEWAY_TLS=terminate
 # HTTP(80) は全て HTTPS(443) へ恒久リダイレクト。
 server {
@@ -87,7 +93,7 @@ server {
 }
 NGINX
 else
-  cat > "$DIR/00-default-deny.conf.template" <<'NGINX'
+  _gateway_write_if_changed "$DIR/00-default-deny.conf.template" <<'NGINX'
 # 生成物 (scripts/gateway-render.sh) / GATEWAY_TLS=none
 # TLS は前段で終端済みなので待ち受けは平文 80 のみ。既知の <team>.<domain> 以外は
 # 444 (無応答クローズ) で拒否し、未定義 Host が先頭 vhost へ落ちるのを防ぐ。
@@ -101,5 +107,21 @@ server {
 NGINX
   rm -f "$DIR/00-redirect.conf.template"
 fi
+
+# --- 既存 team vhost の再生成 ---------------------------------------------------
+# listen/ssl は生成時の GATEWAY_TLS が焼き込まれている。モードを変えた後に古いままだと
+# terminate→none で証明書マウント消失によるクラッシュループ、none→terminate で 444 落ち
+# になるため、現在のモードで作り直す (内容が同じなら書き換えられない = 再起動もされない)。
+for f in "$DIR"/team-*.conf.template; do
+  [[ -e "$f" ]] || continue
+  sub="$(sed -n '1s/.* sub=\([^ ]*\) .*/\1/p' "$f")"
+  port="$(sed -n '1s/.*port=\([0-9]*\)$/\1/p' "$f")"
+  if [[ -n "$sub" && -n "$port" ]]; then
+    gateway_render_passthrough_vhost "$sub" "$port" "$f"
+  else
+    echo "⚠ $f の先頭コメントから sub/port を読み戻せません。現在の GATEWAY_TLS=${GATEWAY_TLS} に"
+    echo "   合っているか手動で確認してください (合っていないと 444 か証明書エラーになります)。"
+  fi
+done
 
 echo "✅ 素通し用テンプレートを生成: ${DIR}/ (GATEWAY_TLS=${GATEWAY_TLS})"

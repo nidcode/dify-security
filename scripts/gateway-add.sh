@@ -225,27 +225,10 @@ NGINX
 echo "✅ 生成: $NCONF"
 else
 # 素通し: auth_request も oauth2-proxy も挟まず Dify へ直接プロキシする。
-# listen は TLS モードで変わる (自前終端=443+証明書 / 前段終端=平文80)。
-if [[ "$GATEWAY_TLS" == "terminate" ]]; then
-  LISTEN=$'    listen 443 ssl;\n    http2 on;'
-  TLSCONF=$'\n    ssl_certificate     /etc/nginx/certs/tls.crt;\n    ssl_certificate_key /etc/nginx/certs/tls.key;'
-else
-  LISTEN='    listen 80;'
-  TLSCONF=''
-fi
-cat > "$NCONF" <<NGINX
-# 生成物 (scripts/gateway-add.sh / GATEWAY_AUTH=none) sub=${SUB} → Dify port=${PORT}
-# 認証なしの素通し。到達できる人は全員この Dify を開ける。
-# 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
-server {
-${LISTEN}
-    server_name ${SUB}.\${GATEWAY_DOMAIN};${TLSCONF}
-
-    location / {
-        proxy_pass http://host.docker.internal:${PORT};
-    }
-}
-NGINX
+# vhost の生成は scripts/lib/gateway.sh の gateway_render_passthrough_vhost に一元化
+# (listen/ssl は GATEWAY_TLS 依存で焼き込まれるため、TLS モード変更時は
+#  gateway-render.sh が同じ関数で既存分を再生成する)。
+gateway_render_passthrough_vhost "$SUB" "$PORT" "$NCONF"
 echo "✅ 生成: $NCONF (素通し / TLS=${GATEWAY_TLS})"
 fi
 

@@ -158,6 +158,63 @@ kc_login() {
   exit 1
 }
 
+# --- 生成物の書き出しヘルパ ----------------------------------------------------
+# 内容が変わったときだけファイルを置き換える (stdin から受け取る)。
+# gateway_reload_nginx_if_stale が mtime で再起動要否を判定するため、無変更の
+# 再生成で mtime だけ進むと up のたびに front-nginx が再起動されてしまう。
+_gateway_write_if_changed() {  # usage: _gateway_write_if_changed <dst> <<EOF ... EOF
+  local dst="$1" tmp="$1.tmp"
+  cat > "$tmp"
+  if [[ -f "$dst" ]] && cmp -s "$tmp" "$dst"; then rm -f "$tmp"; else mv "$tmp" "$dst"; fi
+}
+
+# --- 素通しモードの team vhost -------------------------------------------------
+# gateway-add.sh (新規作成) と gateway-render.sh (TLS モード変更時の再生成) で共用する
+# 唯一の生成箇所。listen/ssl は GATEWAY_TLS に依存して焼き込まれるため、モード変更時は
+# gateway-render.sh が先頭コメントの sub=/port= を読み戻して本関数で作り直す。
+gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile>
+  local sub="$1" port="$2" outfile="$3" listen tlsconf
+  if [[ "${GATEWAY_TLS:-terminate}" == "terminate" ]]; then
+    listen=$'    listen 443 ssl;\n    http2 on;'
+    tlsconf=$'\n    ssl_certificate     /etc/nginx/certs/tls.crt;\n    ssl_certificate_key /etc/nginx/certs/tls.key;'
+  else
+    listen='    listen 80;'
+    tlsconf=''
+  fi
+  _gateway_write_if_changed "$outfile" <<NGINX
+# 生成物 (GATEWAY_AUTH=none) sub=${sub} → Dify port=${port}
+# 認証なしの素通し。到達できる人は全員この Dify を開ける。
+# 共通プロキシヘッダ (Host / X-Forwarded-* / WebSocket) は nginx.conf の http{} で設定済み。
+# TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
+server {
+${listen}
+    server_name ${sub}.\${GATEWAY_DOMAIN};${tlsconf}
+
+    location / {
+        proxy_pass http://host.docker.internal:${port};
+    }
+}
+NGINX
+}
+
+# --- 素通しモードで残った認証系コンテナの撤去 -----------------------------------
+# SSO → 素通しへ切り替えた場合、keycloak/keycloak-db は profiles で、oauth2-proxy-* は
+# overlay 非読込で compose の管理対象から外れ、restart: always のまま走り続ける。
+# compose の up/down では触れないため、project ラベルで直接探して撤去する
+# (コンテナのみ削除。keycloak-pgdata ボリュームは残る = データは保持)。
+gateway_stop_stale_auth() {
+  gateway_is_passthrough || return 0
+  local stale
+  stale="$(docker ps -a \
+      --filter "label=com.docker.compose.project=${GATEWAY_PROJECT}" \
+      --format '{{.ID}} {{.Label "com.docker.compose.service"}}' 2>/dev/null \
+    | awk '$2 != "front-nginx" {print $1}')"
+  [[ -n "$stale" ]] || return 0
+  echo "♻ 素通しモードでは使わない認証系コンテナ (Keycloak / oauth2-proxy) を撤去します (DB データは保持)"
+  # shellcheck disable=SC2086
+  docker rm -f $stale >/dev/null
+}
+
 # --- front-nginx のテンプレート反映 -------------------------------------------
 # 公式 nginx イメージの templates 機能は「コンテナ起動時に一度だけ」envsubst する。
 # そのため gateway-add.sh でチームを足しても、既に動いている front-nginx には

@@ -31,8 +31,22 @@ if [[ "$1" == "up" ]]; then
   fi
 fi
 
+# down は先に残骸を撤去する (SSO→素通し切替で残った keycloak 等がネットワークに
+# 繋がったままだと、down の network rm が active endpoints で失敗するため)。
+if [[ "$1" == "down" ]]; then
+  gateway_stop_stale_auth
+fi
+
 gw_compose "$@"
 
-# up の後、既に動いている front-nginx にテンプレート追加が反映されていなければ再起動する
-# (nginx イメージの envsubst は起動時のみ = up -d だけでは新しい vhost が出てこない)。
-[[ "$1" == "up" ]] && gateway_reload_nginx_if_stale
+if [[ "$1" == "up" ]]; then
+  # SSO→素通し切替で残った認証系コンテナ (compose の管理対象外) を撤去する。
+  gateway_stop_stale_auth
+  # 既に動いている front-nginx にテンプレート追加が反映されていなければ再起動する
+  # (nginx イメージの envsubst は起動時のみ = up -d だけでは新しい vhost が出てこない)。
+  gateway_reload_nginx_if_stale
+  # 起動後の次手順の案内。モード判定は lib に一元化してあるのでここで分岐する。
+  if ! gateway_is_passthrough; then
+    echo "✅ Gateway 起動。初回は 'bash scripts/gateway-keycloak-init.sh' を実行"
+  fi
+fi
