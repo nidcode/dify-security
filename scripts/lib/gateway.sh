@@ -188,7 +188,10 @@ gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile>
 # TLS モード (.env の GATEWAY_TLS) を変えたら make gateway-up で自動再生成される。
 server {
 ${listen}
-    server_name ${sub}.\${GATEWAY_DOMAIN};${tlsconf}
+    # FQDN に加えて短縮ホスト名も受ける。閉域 LAN では http://<sub>/ のように
+    # ドメインなしでアクセスされることが多く、素通しは cookie / リダイレクトが
+    # FQDN に依存しないため安全に許可できる (未知の Host は引き続き 444)。
+    server_name ${sub}.\${GATEWAY_DOMAIN} ${sub};${tlsconf}
 
     location / {
         proxy_pass http://host.docker.internal:${port};
