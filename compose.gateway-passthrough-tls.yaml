@@ -1,0 +1,15 @@
+# =============================================================================
+# AIOP — 素通しモードで「front-nginx 自身が TLS 終端する」場合の追加 overlay
+#   (GATEWAY_AUTH=none かつ GATEWAY_TLS=terminate のときだけ重なる)
+#
+#   compose.gateway-passthrough.yaml が 80 のみに絞った公開ポートへ 443 を戻し、
+#   証明書 (gateway/certs/tls.crt|key) をマウントする。
+#   重ねる判断は scripts/lib/gateway.sh の gw_compose が行う。
+# =============================================================================
+
+services:
+  front-nginx:
+    ports:
+      - "${FRONT_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./gateway/certs:/etc/nginx/certs:ro

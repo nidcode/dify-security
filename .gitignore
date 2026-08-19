@@ -24,6 +24,8 @@ gateway/certs/*
 gateway/oauth2-proxies.gateway.yaml
 # チーム別 server ブロック (生成物)
 gateway/nginx/templates/team-*.conf.template
+# 素通しモード (GATEWAY_AUTH=none) の front-nginx server ブロック一式 (生成物)
+gateway/nginx/passthrough/
 # デプロイ固有のローカル追加テンプレート (バレ→app リダイレクト等)
 gateway/nginx/templates/local-*.conf.template
 # WIF 用 Keycloak client secret (scripts/gateway-wif-client.sh の生成物)

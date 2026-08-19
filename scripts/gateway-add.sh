@@ -34,28 +34,42 @@ ENTRA_CLAIM="${5:-roles}"     # roles(App ロール) | groups(セキュリティ
 
 [[ -f .env ]] || { echo "❌ .env がありません"; exit 1; }
 set -a; . ./.env; set +a
-: "${GATEWAY_DOMAIN:?}"; : "${KEYCLOAK_REALM:?}"
-: "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
-: "${OAUTH2_PROXY_COOKIE_SECRET:?}"
+: "${GATEWAY_DOMAIN:?}"
 
 FQDN="${SUB}.${GATEWAY_DOMAIN}"
 # グループ接頭辞は .env に一元化 (gateway-grant.sh と同じ値を見る必要がある)。
 GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 CLIENT="oauth2-proxy-${NAME}"
 AGG="gateway/oauth2-proxies.gateway.yaml"
-NCONF="gateway/nginx/templates/team-${SUB}.conf.template"
 
-if [[ -f "$AGG" ]] && grep -q "^  oauth2-proxy-${NAME}:" "$AGG"; then
-  echo "❌ oauth2-proxy-${NAME} は既に $AGG に存在します"; exit 1
+# compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
+. scripts/lib/gateway.sh
+gateway_mode_init
+# server ブロックの置き場はモードで変わる (SSO=リポジトリ管理 / 素通し=生成物)。
+NCONF="$(gateway_templates_dir)/team-${SUB}.conf.template"
+mkdir -p "$(dirname "$NCONF")"
+
+if [[ -f "$NCONF" ]]; then
+  echo "❌ ${NCONF} は既に存在します (先に削除するか別の subdomain を指定)"; exit 1
 fi
 
-# compose 構成 / KC() / 起動前チェック は scripts/lib/gateway.sh に一元化。
-. scripts/lib/gateway.sh
-gateway_require_up
+if ! gateway_is_passthrough; then
+  # Keycloak / oauth2-proxy を使うのは SSO モードだけ = 必須 env もここで検査する。
+  : "${KEYCLOAK_REALM:?}"
+  : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
+  : "${OAUTH2_PROXY_COOKIE_SECRET:?}"
+  if [[ -f "$AGG" ]] && grep -q "^  oauth2-proxy-${NAME}:" "$AGG"; then
+    echo "❌ oauth2-proxy-${NAME} は既に $AGG に存在します"; exit 1
+  fi
+  gateway_require_up
+  echo "🔑 Keycloak にログイン ..."
+  kc_login
+fi
 
-echo "🔑 Keycloak にログイン ..."
-kc_login
-
+# --- Keycloak 側の作業 (グループ / client / EntraID 対応付け / oauth2-proxy 定義) ---
+# 素通しモード (GATEWAY_AUTH=none) は認証を行わないので一切作らない。
+# heredoc を含むためインデントは付けない (終端子が行頭でないと解釈されない)。
+if ! gateway_is_passthrough; then
 # --- 1. グループ /aiop-<team> ---
 if KC get groups -r "$KEYCLOAK_REALM" --fields name --format csv 2>/dev/null | grep -qx "\"$GROUP\""; then
   echo "ℹ グループ '$GROUP' は既に存在"
@@ -65,9 +79,23 @@ else
 fi
 
 # --- 2. client oauth2-proxy-<team> ---
+# 冒頭の重複チェックは生成物 (AGG) の grep なので、AGG を消しても Keycloak 側に
+# client が残っているケース (生成物と DB の状態ズレ) は検出できず、create が 409 で
+# 落ちていた。Keycloak 側の既存 client を検出したら再利用し、設定と secret を現在の
+# 引数で上書きする (旧 secret の利用者は消えた AGG の oauth2-proxy 定義だけなので、
+# 無効化して問題ない。むしろ再発行しないと新しい AGG に書く secret と食い違う)。
 CLIENT_SECRET="$(openssl rand -hex 24)"
-CID="$(KC create clients -r "$KEYCLOAK_REALM" \
-  -s clientId="$CLIENT" \
+CID="$(KC get clients -r "$KEYCLOAK_REALM" -q "clientId=$CLIENT" \
+        --fields id --format csv 2>/dev/null | tr -d '"' | head -n1)"
+if [[ -n "$CID" ]]; then
+  echo "ℹ client '$CLIENT' は Keycloak に既存 (id=$CID) → 再利用して設定と secret を上書き"
+else
+  CID="$(KC create clients -r "$KEYCLOAK_REALM" -s clientId="$CLIENT" -i)"
+  echo "✅ client '$CLIENT' を作成 (id=$CID)"
+fi
+# 設定は新規/再利用どちらも同じ update で反映する (二重定義を避ける)。
+# シークレットも update で確実に設定 (create -s secret= は版により無視されるため)。
+KC update "clients/$CID" -r "$KEYCLOAK_REALM" \
   -s enabled=true \
   -s protocol=openid-connect \
   -s publicClient=false \
@@ -76,21 +104,25 @@ CID="$(KC create clients -r "$KEYCLOAK_REALM" \
   -s directAccessGrantsEnabled=false \
   -s "redirectUris=[\"https://${FQDN}/oauth2/callback\"]" \
   -s "webOrigins=[\"https://${FQDN}\"]" \
-  -i)"
-# シークレットは作成後に明示 update で確実に設定 (create -s secret= は版により無視されるため)
-KC update "clients/$CID" -r "$KEYCLOAK_REALM" -s "secret=$CLIENT_SECRET" >/dev/null
-echo "✅ client '$CLIENT' を作成 (id=$CID)"
+  -s "secret=$CLIENT_SECRET" >/dev/null
+echo "✅ client '$CLIENT' の設定を反映 (redirect=https://${FQDN}/oauth2/callback)"
 
 # client に group-membership マッパー (Keycloak グループを groups クレームにフルパスで出力)。
 # client 直付けなので要求スコープに関係なく常に emit される → oauth2-proxy が --allowed-group で判定可能。
-KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
-  -s name=groups -s protocol=openid-connect -s protocolMapper=oidc-group-membership-mapper \
-  -s 'config."full.path"=true' \
-  -s 'config."claim.name"=groups' \
-  -s 'config."id.token.claim"=true' \
-  -s 'config."access.token.claim"=true' \
-  -s 'config."userinfo.token.claim"=true' >/dev/null
-echo "✅ client に groups マッパーを付与"
+# client を再利用した場合は既存のことがあるため、無ければ作る (あれば内容は既知の固定値なので触らない)。
+if KC get "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+     --fields name --format csv 2>/dev/null | grep -qx '"groups"'; then
+  echo "ℹ groups マッパーは既存 (スキップ)"
+else
+  KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+    -s name=groups -s protocol=openid-connect -s protocolMapper=oidc-group-membership-mapper \
+    -s 'config."full.path"=true' \
+    -s 'config."claim.name"=groups' \
+    -s 'config."id.token.claim"=true' \
+    -s 'config."access.token.claim"=true' \
+    -s 'config."userinfo.token.claim"=true' >/dev/null
+  echo "✅ client に groups マッパーを付与"
+fi
 
 # --- 3. (任意) EntraID → /aiop-<team> の対応付け (両パターン対応) ---
 #   実際のマッパー生成は scripts/gateway-grant.sh に一本化 (kcadm -s の JSON クォート崩れを回避)。
@@ -144,8 +176,11 @@ cat >> "$AGG" <<YAML
 YAML
 chmod 600 "$AGG"
 echo "✅ 追記: $AGG (oauth2-proxy-${NAME})"
+fi
 
 # --- 5. front-nginx server ブロック ---
+# heredoc を含むためインデントは付けない (終端子が行頭でないと解釈されない)。
+if ! gateway_is_passthrough; then
 cat > "$NCONF" <<NGINX
 # 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify インスタンス port=${PORT}
 # 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN} は起動時 envsubst。
@@ -193,9 +228,9 @@ server {
         proxy_set_header Host              \$host;
         proxy_set_header X-Real-IP         \$remote_addr;
         proxy_set_header X-Forwarded-For   \$remote_addr;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto \$fwd_proto;
         proxy_set_header X-Forwarded-Host  \$host;
-        proxy_set_header X-Forwarded-Port  443;
+        proxy_set_header X-Forwarded-Port  \$fwd_port;
         proxy_set_header Upgrade           \$http_upgrade;
         proxy_set_header Connection        \$connection_upgrade;
         # 認証済み ID は auth_request の結果のみ信頼 (クライアント送信値を上書き)。
@@ -206,7 +241,41 @@ server {
 }
 NGINX
 echo "✅ 生成: $NCONF"
+else
+# 素通し: auth_request も oauth2-proxy も挟まず Dify へ直接プロキシする。
+# vhost の生成は scripts/lib/gateway.sh の gateway_render_passthrough_vhost に一元化
+# (listen/ssl は GATEWAY_TLS 依存で焼き込まれるため、TLS モード変更時は
+#  gateway-render.sh が同じ関数で既存分を再生成する)。
+gateway_render_passthrough_vhost "$SUB" "$PORT" "$NCONF"
+echo "✅ 生成: $NCONF (素通し / TLS=${GATEWAY_TLS})"
+fi
 
+if gateway_is_passthrough; then
+cat <<EOF
+
+────────────────────────────────────────────────────────────────
+✅ チーム '${NAME}' を追加 (素通し: $( [[ "$GATEWAY_TLS" == terminate ]] && echo "https://${FQDN}" || echo "http://${FQDN} (前段で https 終端)" ) → Dify :${PORT})
+
+⚠ このインスタンスは認証なしで公開されます。front-nginx に到達できる人は
+  全員 Dify を開けます。閉じた網に置くか、前段で認証してください。
+
+反映 (front-nginx に読み込ませる):
+  make gateway-up
+
+チェック:
+  - DNS: ${FQDN} を gateway ホストへ向ける
+  - GATEWAY_TLS=${GATEWAY_TLS} $( [[ "$GATEWAY_TLS" == terminate ]] \
+      && echo "→ gateway/certs/tls.crt|key が必要" \
+      || echo "→ TLS は前段で終端。front-nginx は :${FRONT_HTTP_PORT:-80} で平文待ち受け" )
+  - Dify 側 .env (dify/instances/${NAME}/.env) の URL を公開ドメインに:
+      bash scripts/gateway-difyenv.sh ${NAME} ${SUB}
+
+後で認証を有効にする場合: .env の GATEWAY_AUTH=sso に戻し、
+  rm $(gateway_templates_dir)/team-${SUB}.conf.template
+  bash scripts/gateway-add.sh ${NAME} ${PORT} ${SUB} [approle]
+────────────────────────────────────────────────────────────────
+EOF
+else
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────
@@ -223,3 +292,4 @@ cat <<EOF
           (または Keycloak でユーザーを /${GROUP} に追加)
 ────────────────────────────────────────────────────────────────
 EOF
+fi

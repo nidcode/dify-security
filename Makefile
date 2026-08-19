@@ -61,15 +61,14 @@ pull: ## LiteLLM のイメージを最新に pull
 	-$(LITELLM) pull
 
 # --- Gateway スタック (front-nginx + Keycloak + oauth2-proxy) --------------
-# compose プロジェクト名 (aiop-gateway) と compose ファイル構成は
-# scripts/lib/gateway.sh に一元化。ここは scripts/gateway-compose.sh 経由で呼ぶだけ。
-# oauth2-proxy 群 (gateway/oauth2-proxies.gateway.yaml) は存在すれば自動で重なる。
+# compose プロジェクト名 (aiop-gateway) / compose ファイル構成 / 動作モード判定は
+# scripts/lib/gateway.sh に一元化。ここは scripts/gateway-compose.sh 経由で呼ぶだけで、
+# モード別の案内や overlay の選択もそちらが行う (.env の GATEWAY_AUTH/GATEWAY_TLS)。
 GATEWAY := bash scripts/gateway-compose.sh
 
 gateway-up: ## Gateway を起動 (nginx + Keycloak + oauth2-proxy)
 	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
 	@$(GATEWAY) up -d
-	@echo "✅ Gateway 起動。初回は 'bash scripts/gateway-keycloak-init.sh' を実行"
 
 gateway-down: ## Gateway を停止 (データは保持)
 	-@$(GATEWAY) down

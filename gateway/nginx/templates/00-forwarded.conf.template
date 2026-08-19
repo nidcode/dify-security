@@ -1,0 +1,11 @@
+# X-Forwarded-Proto / Port / For の決め方。nginx.conf の http{} が
+# $fwd_proto / $fwd_port / $fwd_for を参照する。
+# このファイルは「front-nginx 自身が最外エッジで TLS 終端する」構成用:
+# クライアント送信の X-Forwarded-* は信頼せず https / 443 / 実接続元 IP に固定する
+# (詐称による Dify の絶対URL・secure cookie、Keycloak の監査ログ汚染を防ぐ)。
+# ※ 前段で TLS 終端する構成 (GATEWAY_AUTH=none + GATEWAY_TLS=none) では
+#    scripts/gateway-render.sh が「前段の値を引き継ぐ」版を gateway/nginx/passthrough/ に
+#    生成する (自前終端の素通しはこのファイルをそのまま複製して使う)。
+map $host $fwd_proto { default https; }
+map $host $fwd_port  { default 443; }
+map $host $fwd_for   { default $remote_addr; }
