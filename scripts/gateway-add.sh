@@ -79,9 +79,23 @@ else
 fi
 
 # --- 2. client oauth2-proxy-<team> ---
+# 冒頭の重複チェックは生成物 (AGG) の grep なので、AGG を消しても Keycloak 側に
+# client が残っているケース (生成物と DB の状態ズレ) は検出できず、create が 409 で
+# 落ちていた。Keycloak 側の既存 client を検出したら再利用し、設定と secret を現在の
+# 引数で上書きする (旧 secret の利用者は消えた AGG の oauth2-proxy 定義だけなので、
+# 無効化して問題ない。むしろ再発行しないと新しい AGG に書く secret と食い違う)。
 CLIENT_SECRET="$(openssl rand -hex 24)"
-CID="$(KC create clients -r "$KEYCLOAK_REALM" \
-  -s clientId="$CLIENT" \
+CID="$(KC get clients -r "$KEYCLOAK_REALM" -q "clientId=$CLIENT" \
+        --fields id --format csv 2>/dev/null | tr -d '"' | head -n1)"
+if [[ -n "$CID" ]]; then
+  echo "ℹ client '$CLIENT' は Keycloak に既存 (id=$CID) → 再利用して設定と secret を上書き"
+else
+  CID="$(KC create clients -r "$KEYCLOAK_REALM" -s clientId="$CLIENT" -i)"
+  echo "✅ client '$CLIENT' を作成 (id=$CID)"
+fi
+# 設定は新規/再利用どちらも同じ update で反映する (二重定義を避ける)。
+# シークレットも update で確実に設定 (create -s secret= は版により無視されるため)。
+KC update "clients/$CID" -r "$KEYCLOAK_REALM" \
   -s enabled=true \
   -s protocol=openid-connect \
   -s publicClient=false \
@@ -90,21 +104,25 @@ CID="$(KC create clients -r "$KEYCLOAK_REALM" \
   -s directAccessGrantsEnabled=false \
   -s "redirectUris=[\"https://${FQDN}/oauth2/callback\"]" \
   -s "webOrigins=[\"https://${FQDN}\"]" \
-  -i)"
-# シークレットは作成後に明示 update で確実に設定 (create -s secret= は版により無視されるため)
-KC update "clients/$CID" -r "$KEYCLOAK_REALM" -s "secret=$CLIENT_SECRET" >/dev/null
-echo "✅ client '$CLIENT' を作成 (id=$CID)"
+  -s "secret=$CLIENT_SECRET" >/dev/null
+echo "✅ client '$CLIENT' の設定を反映 (redirect=https://${FQDN}/oauth2/callback)"
 
 # client に group-membership マッパー (Keycloak グループを groups クレームにフルパスで出力)。
 # client 直付けなので要求スコープに関係なく常に emit される → oauth2-proxy が --allowed-group で判定可能。
-KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
-  -s name=groups -s protocol=openid-connect -s protocolMapper=oidc-group-membership-mapper \
-  -s 'config."full.path"=true' \
-  -s 'config."claim.name"=groups' \
-  -s 'config."id.token.claim"=true' \
-  -s 'config."access.token.claim"=true' \
-  -s 'config."userinfo.token.claim"=true' >/dev/null
-echo "✅ client に groups マッパーを付与"
+# client を再利用した場合は既存のことがあるため、無ければ作る (あれば内容は既知の固定値なので触らない)。
+if KC get "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+     --fields name --format csv 2>/dev/null | grep -qx '"groups"'; then
+  echo "ℹ groups マッパーは既存 (スキップ)"
+else
+  KC create "clients/$CID/protocol-mappers/models" -r "$KEYCLOAK_REALM" \
+    -s name=groups -s protocol=openid-connect -s protocolMapper=oidc-group-membership-mapper \
+    -s 'config."full.path"=true' \
+    -s 'config."claim.name"=groups' \
+    -s 'config."id.token.claim"=true' \
+    -s 'config."access.token.claim"=true' \
+    -s 'config."userinfo.token.claim"=true' >/dev/null
+  echo "✅ client に groups マッパーを付与"
+fi
 
 # --- 3. (任意) EntraID → /aiop-<team> の対応付け (両パターン対応) ---
 #   実際のマッパー生成は scripts/gateway-grant.sh に一本化 (kcadm -s の JSON クォート崩れを回避)。
