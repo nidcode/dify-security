@@ -53,6 +53,13 @@ make gateway-up                              # front-nginx だけ起動
   閉じた網に置くか、前段で認証すること。
 - `GATEWAY_TLS=none` では `X-Forwarded-Proto` / `-Port` は前段の値をそのまま引き継ぐ
   (= 前段を信頼する)。前段を経由せず直接 80 に届く経路が無いことが前提。
+- **短縮ホスト名 (`http://dify01/`) の扱いはモードで異なる**。閉域 LAN ではドメインなしで
+  アクセスされることが多いため:
+  - `GATEWAY_TLS=none`: 短縮名をそのまま受ける (証明書を提示しないので単一ラベル名でよい)
+  - `GATEWAY_TLS=terminate`: 短縮名は 80 で受けて `https://<sub>.<domain>` へ 301 で寄せる。
+    単一ラベル名は公的 CA が証明書を発行できず、ワイルドカード `*.<domain>` にも含まれない
+    ため https では張れない。**301 先を解決するには `<sub>.<domain>` が DNS で引ける必要がある**
+    (社内 DNS の検索ドメイン等)。`https://dify01/` を直接開いた場合は 444 で拒否。
 - 生成物は `gateway/nginx/passthrough/` (SSO 用の `gateway/nginx/templates/` とは別)。
   混在させると同じ `server_name` が二重定義になるためディレクトリを分けている。
 - **現状 `GATEWAY_AUTH=sso` と `GATEWAY_TLS=none` の組み合わせは未対応**
