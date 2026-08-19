@@ -284,7 +284,7 @@ cat <<EOF
 
 後で認証を有効にする場合: .env の GATEWAY_AUTH=sso に戻し、
   rm $(gateway_templates_dir)/team-${SUB}.conf.template
-  bash scripts/gateway-add.sh ${NAME} ${PORT} ${SUB} [approle]
+  bash scripts/gateway-add.sh ${NAME} ${PORT_ARG} ${SUB} [approle]
 ────────────────────────────────────────────────────────────────
 EOF
 else

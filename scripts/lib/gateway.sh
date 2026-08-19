@@ -126,6 +126,29 @@ gw_compose() {
 # kcadm.sh の呼び出し (Keycloak コンテナ内で実行)。
 KC() { $GW exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
 
+# up の引数から「front-nginx が起動対象か」を判定する。
+#   compose は サービス無指定 = 全サービス、指定あり = そのサービスのみ。
+#   front-nginx を狙っていない up (例: up -d keycloak) で front-nginx の設定検証や
+#   再作成まで走らせると、証明書欠落や upstream 未解決で Keycloak だけの起動・保守が
+#   できなくなる (証明書欠落時に Keycloak は起動させる、という既存の方針とも矛盾する)。
+gateway_up_targets_front_nginx() {  # usage: <compose の引数...> (先頭は up)
+  local a skip=0 services=()
+  shift || true   # "up" を捨てる
+  for a in "$@"; do
+    if [[ $skip == 1 ]]; then skip=0; continue; fi
+    case "$a" in
+      # 値を伴うオプション: 次の引数はサービス名ではない
+      --scale|--timeout|-t|--exit-code-from|--attach|--no-attach|--pull|--wait-timeout)
+        skip=1; continue ;;
+      -*) continue ;;
+    esac
+    services+=("$a")
+  done
+  [[ ${#services[@]} -eq 0 ]] && return 0        # 無指定 = 全部 = front-nginx を含む
+  local s; for s in "${services[@]}"; do [[ "$s" == "front-nginx" ]] && return 0; done
+  return 1
+}
+
 # --- 起動前チェック -----------------------------------------------------------
 # docker compose exec は未起動時に `service "keycloak" is not running` としか言わず、
 # 何をすれば復旧するのか分からない。原因を切り分けて復旧コマンドまで案内する。
@@ -171,12 +194,19 @@ gateway_require_up() {
 
 # front-nginx は tls.crt/tls.key が無いと起動できずクラッシュループする。
 # up の前に気付けるよう警告する (Keycloak だけ使う検証もあるので中断はしない)。
-gateway_warn_missing_certs() {
-  # 前段で TLS 終端する構成 (GATEWAY_TLS=none) では front-nginx は 443 を持たない。
+# front-nginx が必要とする証明書が揃っているか。前段終端 (GATEWAY_TLS=none) では
+# 443 を持たないので常に「揃っている」扱い。警告と設定検証のゲートで共用する。
+gateway_certs_ready() {
   [[ "${GATEWAY_TLS:-terminate}" == "terminate" ]] || return 0
+  local f
+  for f in "${GATEWAY_CERT_FILES[@]}"; do [[ -f "$f" ]] || return 1; done
+  return 0
+}
+
+gateway_warn_missing_certs() {
+  gateway_certs_ready && return 0
   local f missing=()
   for f in "${GATEWAY_CERT_FILES[@]}"; do [[ -f "$f" ]] || missing+=("$f"); done
-  [[ ${#missing[@]} -eq 0 ]] && return 0
   echo "⚠ TLS 証明書がありません: ${missing[*]}"
   echo "   front-nginx は起動に失敗します (Keycloak 等は起動します)。"
   echo "   ワイルドカード証明書を上記の名前で配置してから 'make gateway-up' を再実行してください。"
@@ -335,6 +365,14 @@ gateway_check_nginx_config() {
   local out
   out="$(gw_compose run --rm --no-deps -T front-nginx nginx -t 2>&1)" && return 0
   local emerg; emerg="$(grep -m1 '\[emerg\]' <<<"$out" || true)"
+  if [[ -z "$emerg" ]]; then
+    # nginx -t まで到達できなかった (イメージ取得失敗・network 不整合など)。
+    # 「検証できないこと」を理由に up を止めると、設定は正しいのに何も反映できなくなる。
+    # 検証はあくまで安全網なので、実行不能なら警告に留めて続行する。
+    echo "⚠ 設定検証を実行できませんでした (検証をスキップして続行します):"
+    printf '   %s\n' "$(tail -2 <<<"$out")"
+    return 0
+  fi
   echo "❌ front-nginx の設定にエラーがあります (反映を中止しました / 現在の稼働構成は維持):"
   # [emerg] はパターンでは文字クラス扱いになるためエスケープする
   # (${emerg#*[emerg] } と書くと理由部分まで削れる)。
