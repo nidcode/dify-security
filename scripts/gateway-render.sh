@@ -25,6 +25,7 @@ set -a; . ./.env; set +a
 
 . scripts/lib/gateway.sh
 gateway_mode_init
+gateway_render_realip
 
 gateway_is_passthrough || {
   echo "ℹ GATEWAY_AUTH=${GATEWAY_AUTH} (SSO) では土台テンプレートはリポジトリ管理のため生成不要"; exit 0; }
@@ -73,7 +74,7 @@ if [[ "$GATEWAY_TLS" == "terminate" ]]; then
 # server_name にマッチしない Host/SNI が、最初にロードされた vhost へ落ちるのを防ぐ。
 # SNI 不一致時はこの default_server の証明書が提示されるため tls.crt/key を指定する。
 server {
-    listen 443 ssl default_server;
+    listen 443 ssl${GATEWAY_PROXY_PROTOCOL} default_server;
     http2 on;
     server_name _;
 

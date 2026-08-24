@@ -21,12 +21,15 @@ cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 gateway_mode_init
 
-# front-nginx を起動対象にしない up (例: up -d keycloak) では、front-nginx 向けの
-# 準備・検証・再作成を行わない。Keycloak だけの起動や保守を妨げないため。
+# front-nginx を起動対象にしない up (例: up -d keycloak) や down/ps/logs では、front-nginx 向けの
+# 準備・検証・再作成を行わない。GATEWAY_TRUSTED_PROXY_IP の値が壊れていても Keycloak だけの
+# 起動や保守・回復操作 (down/ps/logs) を妨げないため。
 FRONT_NGINX_TARGETED=0
 [[ "$1" == "up" ]] && gateway_up_targets_front_nginx "$@" && FRONT_NGINX_TARGETED=1
 
 if [[ "$FRONT_NGINX_TARGETED" == 1 ]]; then
+  # front-nginx 向けの生成物・検証はここでのみ行う (関心の分離)。
+  gateway_render_realip
   # front-nginx がクラッシュループする典型原因 (証明書欠落) を先に知らせる。
   gateway_warn_missing_certs
   # 素通しモードは server ブロックが生成物なので、起動前に土台を書き出す。

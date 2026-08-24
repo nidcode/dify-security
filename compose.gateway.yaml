@@ -44,9 +44,18 @@ services:
       # NGINX_ENVSUBST_FILTER で GATEWAY_DOMAIN のみ置換 ($host 等の nginx 変数は温存)。
       - ./gateway/nginx/templates:/etc/nginx/templates:ro
       - ./gateway/certs:/etc/nginx/certs:ro
+      # PROXY protocol 用の実接続元IP設定。既定 (GATEWAY_TRUSTED_PROXY_IP 未設定) は空ディレクトリ
+      # = nginx.conf の glob include が 0 件マッチするだけで何も変わらない。
+      - ./gateway/nginx/realip:/etc/nginx/realip.d:ro
     environment:
       GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
-      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN"
+      # GATEWAY_PROXY_PROTOCOL は .env の値ではなく、scripts/lib/gateway.sh の
+      # gateway_render_realip が GATEWAY_TRUSTED_PROXY_IP から都度算出してエクスポートする
+      # 派生値 (.env には持たない)。そのため起動は必ず make gateway-up 経由にすること。
+      # docker compose を直接叩くと (このリポジトリの他のモード判定と同様に) 空になり、
+      # PROXY protocol を送ってくる前段プロキシがある構成では接続が壊れる。
+      GATEWAY_PROXY_PROTOCOL: ${GATEWAY_PROXY_PROTOCOL}
+      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN|GATEWAY_PROXY_PROTOCOL"
       NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
     extra_hosts:
       # 各 Dify インスタンス (ホストの EXPOSE_NGINX_PORT) へ host-gateway 経由で到達。

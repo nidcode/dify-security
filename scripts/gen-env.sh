@@ -42,6 +42,7 @@ if [[ -f .env && "$FORCE" != "--force" ]]; then
   ensure_kv OAUTH2_PROXY_COOKIE_SECRET "$(hexn 16)"
   ensure_kv GATEWAY_AUTH             "sso"
   ensure_kv GATEWAY_TLS              "terminate"
+  ensure_kv GATEWAY_TRUSTED_PROXY_IP ""
   ensure_kv ENTRA_TENANT_ID          "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   ensure_kv ENTRA_CLIENT_ID          "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   ensure_kv ENTRA_CLIENT_SECRET      "CHANGE-ME-entra-client-secret"
@@ -56,7 +57,7 @@ fi
 declare -A carry=()
 if [[ -f .env && "$FORCE" == "--force" ]]; then
   for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN KEYCLOAK_GROUP_PREFIX GATEWAY_AUTH GATEWAY_TLS \
-           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
+           GATEWAY_TRUSTED_PROXY_IP ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
     line="$(grep -m1 "^${k}=" .env || true)"
     [[ -n "$line" ]] && carry["$k"]="${line#*=}"
   done

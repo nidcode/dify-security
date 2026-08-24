@@ -30,9 +30,11 @@ services:
     volumes: !override
       - ./gateway/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./gateway/nginx/passthrough:/etc/nginx/templates:ro
+      - ./gateway/nginx/realip:/etc/nginx/realip.d:ro
     environment:
       GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
-      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN"
+      GATEWAY_PROXY_PROTOCOL: ${GATEWAY_PROXY_PROTOCOL}
+      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN|GATEWAY_PROXY_PROTOCOL"
       NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
 
   # 素通しでは Keycloak を一切使わない。profiles を付けて既定の up 対象から外す
