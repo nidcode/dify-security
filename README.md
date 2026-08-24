@@ -353,7 +353,7 @@ curl -X POST http://localhost:4000/key/generate \
 - [ ] **データ at rest**: `dify/instances/<name>/volumes/` はホスト平文。ディレクトリ権限の厳格化・
       ディスク暗号化・バックアップを行う。
 - [ ] **リソース制限**: マルチテナント同居のノイジーネイバー対策に、各 compose で `cpus`/`mem` 制限を付与。
-- [ ] **イメージのピン留め**: Dify は `DIFY_VERSION` で固定 (デフォルト 1.14.2)。LiteLLM も固定タグ推奨。
+- [ ] **イメージのピン留め**: Dify は `DIFY_VERSION` で固定 (デフォルト 1.16.1)。LiteLLM も固定タグ推奨。
 - [ ] **ガードレール**: 必要に応じて `litellm/config.yaml` の `guardrails:` (PIIマスク等) を有効化。
 
 ---
