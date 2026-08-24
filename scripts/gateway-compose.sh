@@ -20,6 +20,7 @@ cd "$(dirname "$0")/.."
 # 動作モード (GATEWAY_AUTH / GATEWAY_TLS) は .env に持つので読み込む。
 set -a; . ./.env; set +a
 gateway_mode_init
+gateway_render_realip
 
 # front-nginx を起動対象にしない up (例: up -d keycloak) では、front-nginx 向けの
 # 準備・検証・再作成を行わない。Keycloak だけの起動や保守を妨げないため。

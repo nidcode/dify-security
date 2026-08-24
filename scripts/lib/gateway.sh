@@ -23,6 +23,9 @@ GATEWAY_PASSTHRU_TLS_FILE="compose.gateway-passthrough-tls.yaml"
 GATEWAY_PROXIES_FILE="gateway/oauth2-proxies.gateway.yaml"
 # front-nginx が参照する TLS 証明書 (compose の ./gateway/certs マウント配下)。
 GATEWAY_CERT_FILES=(gateway/certs/tls.crt gateway/certs/tls.key)
+# PROXY protocol 用の実接続元IP設定 (compose の ./gateway/nginx/realip マウント配下)。
+# 生成物 (.gitignore 済み)。中身は gateway_render_realip が GATEWAY_TRUSTED_PROXY_IP から作る。
+GATEWAY_REALIP_DIR="gateway/nginx/realip"
 # Dify インスタンスへの既定の到達先。gateway と同一ホストで Dify が動く構成では、
 # compose.gateway.yaml の extra_hosts (host.docker.internal:host-gateway) 経由で
 # ホストの publish ポートに届く。別ホストの Dify は gateway-add.sh に <host>:<port> を渡す。
@@ -92,6 +95,71 @@ gateway_mode_init() {
     echo "❌ GATEWAY_AUTH=sso と GATEWAY_TLS=none の組み合わせは未対応です。"
     echo "   前段で TLS 終端する場合は現状 GATEWAY_AUTH=none (素通し) のみ対応。"
     exit 1
+  fi
+  # ここでは値の検証のみ (副作用なし)。実際の nginx 向け生成物を書くのは
+  # front-nginx の設定に触るスクリプト (gateway-compose.sh 等) が明示的に呼ぶ
+  # gateway_render_realip の役目 (関心の分離: Keycloak 操作系スクリプトの実行が
+  # 意図せず nginx の生成物へ副作用を及ぼさないようにする)。
+}
+
+# --- PROXY protocol (前段が TLS を終端せず TCP/SNI のまま転送する場合の実接続元IP復元) ---
+#   GATEWAY_TRUSTED_PROXY_IP (.env・カンマ区切りでIP/CIDR複数可) が空なら何もしない
+#   (= 使わないパターンが既定。ssl な listen も従来どおり proxy_protocol 無しのまま)。
+#   front-nginx の設定/生成物に触るスクリプト (gateway-compose.sh / gateway-render.sh /
+#   gateway-add.sh) が gateway_mode_init の直後に明示的に呼ぶ。Keycloak 操作専用の
+#   スクリプト (gateway-grant.sh 等) からは呼ばない (関心外・.env 未読込での誤動作を防ぐ)。
+gateway_render_realip() {
+  mkdir -p "$GATEWAY_REALIP_DIR"
+  local raw="${GATEWAY_TRUSTED_PROXY_IP:-}" ip
+  # listen 行に埋め込む断片。空 (既定) なら listen は変化しない = 従来どおり。
+  export GATEWAY_PROXY_PROTOCOL=""
+  local enabled=0
+  if [[ -n "$raw" && "${GATEWAY_TLS:-terminate}" == "terminate" ]]; then
+    local ips=() entry
+    IFS=',' read -ra entry <<<"$raw"
+    for ip in "${entry[@]}"; do
+      ip="${ip// /}"
+      [[ -n "$ip" ]] || continue
+      # 妥当性チェック: 各オクテット 0-255・CIDR プレフィックス 0-32 まで (IPv4 のみ対応)。
+      [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]|[12][0-9]|3[0-2]))?$ ]] || {
+        echo "❌ GATEWAY_TRUSTED_PROXY_IP の値が IPv4/CIDR に見えません: '${ip}'"; exit 1; }
+      local o
+      for o in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+        ((o <= 255)) || { echo "❌ GATEWAY_TRUSTED_PROXY_IP のオクテットが範囲外です: '${ip}'"; exit 1; }
+      done
+      ips+=("$ip")
+    done
+    if ((${#ips[@]} == 0)); then
+      echo "❌ GATEWAY_TRUSTED_PROXY_IP が値を含みません (カンマ/空白のみ): '${raw}'"
+      echo "   使わない場合は空文字列にしてください。"
+      exit 1
+    fi
+    enabled=1
+    export GATEWAY_PROXY_PROTOCOL=" proxy_protocol"
+    _gateway_write_if_changed "$GATEWAY_REALIP_DIR/00-realip.conf" <<EOF
+# 生成物 (scripts/lib/gateway.sh: gateway_render_realip) / .env の GATEWAY_TRUSTED_PROXY_IP から生成
+# 前段プロキシ (TCP/SNI パススルー) が付ける PROXY protocol ヘッダを、この IP からのみ信頼して
+# \$remote_addr を実接続元IPへ復元する。前段プロキシ側でも PROXY protocol の送出が必要。
+$(for ip in "${ips[@]}"; do echo "set_real_ip_from ${ip};"; done)
+real_ip_header proxy_protocol;
+EOF
+  elif [[ -n "$raw" ]]; then
+    echo "⚠ GATEWAY_TRUSTED_PROXY_IP は GATEWAY_TLS=terminate のときだけ意味を持ちます"
+    echo "   (現在 GATEWAY_TLS=${GATEWAY_TLS:-terminate})。無視します。"
+  fi
+  ((enabled)) || rm -f "$GATEWAY_REALIP_DIR/00-realip.conf"
+
+  # 既存の SSO team vhost (gateway/nginx/templates/team-*.conf.template) は
+  # gateway-add.sh が作成時に1回だけ書く生成物で、TLS モード変更時のような自動再生成が
+  # 無い (素通しモードの gateway_render_passthrough_vhost と異なる)。この機能を導入する
+  # 前に作られたチームは listen 行に ${GATEWAY_PROXY_PROTOCOL} の置き場が無いままなので、
+  # 無ければ足す (冪等: 既に置き場があるファイルにはマッチしない)。
+  if ! gateway_is_passthrough; then
+    local f
+    for f in gateway/nginx/templates/team-*.conf.template; do
+      [[ -e "$f" ]] || continue
+      grep -q 'listen 443 ssl;' "$f" && sed -i 's/listen 443 ssl;/listen 443 ssl${GATEWAY_PROXY_PROTOCOL};/' "$f"
+    done
   fi
 }
 
@@ -278,7 +346,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    listen 443 ssl\${GATEWAY_PROXY_PROTOCOL};
     http2 on;
     server_name ${sub}.\${GATEWAY_DOMAIN};
 
@@ -342,8 +410,12 @@ gateway_reload_nginx_if_stale() {
   [[ -n "$started" ]] || return 0
   local dir; dir="$(gateway_templates_dir)"
   [[ -d "$dir" ]] || return 0
-  # 起動時刻より新しい *.template があるか (find -newermt は ISO8601 を解釈できる)
-  newest="$(find "$dir" -name '*.conf.template' -newermt "$started" -print -quit 2>/dev/null || true)"
+  # 起動時刻より新しい *.template があるか (find -newermt は ISO8601 を解釈できる)。
+  # realip.d (PROXY protocol の実接続元IP設定) は別ディレクトリなので合わせて見る。
+  # ここが変わっただけでは compose 側の環境変数 (GATEWAY_PROXY_PROTOCOL の文字列自体) は
+  # 変化しないことがあるため (信頼IPの差し替えなど)、mtime で検出しないと反映漏れになる。
+  newest="$(find "$dir" "$GATEWAY_REALIP_DIR" \( -name '*.conf.template' -o -name '*.conf' \) \
+    -newermt "$started" -print -quit 2>/dev/null || true)"
   [[ -n "$newest" ]] || return 0
   echo "♻ テンプレート更新を検出 → front-nginx を作り直して反映します"
   # restart ではなく作り直す。envsubst は起動時に conf.d へ書き出すだけで、削除された

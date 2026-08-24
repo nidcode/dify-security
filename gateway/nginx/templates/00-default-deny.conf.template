@@ -3,7 +3,7 @@
 #   - 80 の default_server は 00-redirect.conf が持つため、ここは 443 のみ宣言する。
 #   - SNI 不一致時は nginx がこの default_server の証明書を提示するため tls.crt/key を指定する。
 server {
-    listen 443 ssl default_server;
+    listen 443 ssl${GATEWAY_PROXY_PROTOCOL} default_server;
     http2 on;
     server_name _;
 

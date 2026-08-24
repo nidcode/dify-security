@@ -53,6 +53,7 @@ AGG="gateway/oauth2-proxies.gateway.yaml"
 # compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
 . scripts/lib/gateway.sh
 gateway_mode_init
+gateway_render_realip
 # 第2引数を <port> / <host>:<port> として解析 → UPSTREAM_HOST / UPSTREAM_PORT
 gateway_parse_upstream "$PORT_ARG"
 PORT="$UPSTREAM_PORT"
@@ -197,7 +198,7 @@ cat > "$NCONF" <<NGINX
 # 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify upstream=${UPSTREAM_HOST}:${PORT}
 # 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN} は起動時 envsubst。
 server {
-    listen 443 ssl;
+    listen 443 ssl\${GATEWAY_PROXY_PROTOCOL};
     http2 on;
     server_name ${SUB}.\${GATEWAY_DOMAIN};
 

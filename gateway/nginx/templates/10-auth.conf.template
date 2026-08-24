@@ -2,7 +2,7 @@
 # EntraID へのフェデレーション、ログイン画面、トークン/JWKS 配布はすべてここ経由。
 # 共通プロキシヘッダ (Host/X-Forwarded-*) は nginx.conf の http{} で設定済み。
 server {
-    listen 443 ssl;
+    listen 443 ssl${GATEWAY_PROXY_PROTOCOL};
     http2 on;
     server_name auth.${GATEWAY_DOMAIN};
 
