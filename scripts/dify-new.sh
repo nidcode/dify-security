@@ -89,6 +89,17 @@ set_env CODE_EXECUTION_API_KEY "$sandbox_key"
 set_env PLUGIN_DAEMON_KEY "$(rand)"
 set_env PLUGIN_DIFY_INNER_API_KEY "$(rand)"
 
+# Dify Agent backend (1.16+, 存在すれば) の認証鍵。
+#   DIFY_AGENT_PLUGIN_DAEMON_API_KEY / DIFY_AGENT_INNER_API_KEY は .env で空のままなら
+#   compose 側の ${VAR:-${PLUGIN_DAEMON_KEY:-既定}} 等のフォールバックで上の再生成値を
+#   自動的に引き継ぐため、ここでは触らない。一方、以下の3つは .env.example に開発用の
+#   固定値 (公開リポジトリで既知) が直接入っており、フォールバックが効かないため個別に
+#   再生成する。特に DIFY_AGENT_SHELLCTL_AUTH_TOKEN が既定 (空) のままだと、untrusted な
+#   コードを実行する local_sandbox への shellctl API 呼び出しが無認証になる。
+set_env DIFY_AGENT_API_TOKEN "$(rand)"
+set_env DIFY_AGENT_SERVER_SECRET_KEY "$(rand)"
+set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$(rand)"
+
 # 既定ベクタDB (weaviate) の共有既定APIキーを個別化。client(api) と server(weaviate) で一致必須。
 if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
   wv_key="$(rand)"
@@ -100,7 +111,7 @@ fi
 chmod 600 "$ENV"
 
 echo "✅ 作成: $DST  (project=dify-$NAME / port=$PORT)"
-echo "   機密再生成: SECRET_KEY / INIT_PASSWORD / DB / Redis / Sandbox / Plugin 鍵"
+echo "   機密再生成: SECRET_KEY / INIT_PASSWORD / DB / Redis / Sandbox / Plugin / Agent 鍵"
 echo "   INIT_PASSWORD (管理者登録用) は控えておく:"
 echo "     grep '^INIT_PASSWORD=' $ENV"
 echo "   起動: cd $DST && docker compose up -d      → http://localhost:$PORT"

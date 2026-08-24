@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DIFY_VERSION="${DIFY_VERSION:-1.14.2}"
+DIFY_VERSION="${DIFY_VERSION:-1.16.1}"
 
 echo "==> 1/3 docker / compose を確認"
 command -v docker >/dev/null 2>&1 || { echo "❌ docker が見つかりません"; exit 1; }
