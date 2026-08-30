@@ -53,6 +53,26 @@ sed -i \
 > `<LITELLM_MASTER_KEY>` 等のシークレット系プレースホルダは上記の一括置換の対象外です。
 > ドキュメントに値を書き残さず、実行のたびに対象VMで `grep <KEY名>= .env` して確認してください。
 
+### パフォーマンステスト (08〜10) 専用のプレースホルダ
+
+vLLMで自前ホストするモデルの性能テストを実施する場合のみ使用:
+
+| プレースホルダ | 意味 | 例 |
+|---|---|---|
+| `<SYSTEM_NAME>` | 対象システムの呼称 | `SAIF` |
+| `<VLLM_HOST>` | vLLMを稼働させるGPUホストのSSH接続先 | `10.0.2.10` |
+| `<VLLM_PORT>` | vLLMのAPI/メトリクス公開ポート | `8001` |
+| `<VLLM_MODEL_ID>` | vLLMで配信するモデルのHugging Face ID/パス | `RedHatAI/gemma-4-31B-it-FP8-block` |
+| `<VLLM_SERVED_MODEL_NAME>` | vLLM起動時の `--served-model-name` | `gemma4-31b` |
+| `<VLLM_TOKENIZER_PATH>` | トークナイザのローカルパス | `/opt/models/hub/models--RedHatAI--gemma-4-31B-it-FP8-block` |
+| `<VLLM_MODELS_DIR>` | モデルファイルのキャッシュ先ディレクトリ | `/opt/models` |
+| `<VLLM_BENCH_IMAGE>` | ベンチマーク用Dockerイメージ (事前ビルド) | `litellm-vllm/vllm-bench:local` |
+| `<VLLM_CONTAINER_NAME>` | vLLMサーバのコンテナ名 | `vllm-gemma-31b` |
+| `<BENCH_REPO_DIR>` | `bench/*.py` 一式が置かれているリポジトリのルート (本リポジトリとは別) | `/opt/vllm-bench` |
+| `<LOCUST_DIR>` | Locust実行ホスト上の `locustfile.py`/`docker-compose.yml` の場所 | `/data/locust` |
+| `<PERF_APP_RAG>` / `<PERF_APP_NORAG>` / `<PERF_APP_MAXTOKEN>` | 測定用に作成するDifyアプリ名 | `perftest_rag` 等 |
+| `<CREATED_BY>` / `<CREATED_DATE>` | 計画書の作成者・作成日 | 実施者名 / `2026-08-30` |
+
 ## 実行時の注意
 
 - コマンドがエラーで止まったら、そこで**作業を中断**し、エラーメッセージを記録して
@@ -73,3 +93,6 @@ sed -i \
 5. `05_TLS証明書の更新.md`
 6. `06_バージョンアップ.md` (LiteLLM・Gateway)
 7. `07_日常点検.md`
+8. `08_パフォーマンステスト計画書.md` (vLLM自前ホスト構成向け)
+9. `09_パフォーマンステスト手順書.md`
+10. `10_パフォーマンステスト結果記録.xlsx`
