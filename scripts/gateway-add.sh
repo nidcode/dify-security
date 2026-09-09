@@ -178,6 +178,9 @@ cat >> "$AGG" <<YAML
       - --cookie-name=_oauth2_proxy_${NAME}
       - --cookie-secret=\${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=true
+      # SameSite 属性を付けない。IE11 (Trident) 等、SameSite の解釈が怪しい古い
+      # クライアントで OAuth コールバック時に CSRF cookie を読めず失敗する事例への対応。
+      - --cookie-samesite=
       - --email-domain=*
       - --scope=openid email profile
       - --allowed-group=/${GROUP}
