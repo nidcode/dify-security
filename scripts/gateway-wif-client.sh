@@ -16,7 +16,8 @@
 #   GCP 側の attribute-condition は "assertion.azp=='<client-id>'" にする
 #   (Keycloak は client_credentials で発行したトークンにも azp=client_id を必ず載せる)。
 #
-#   auth.${GATEWAY_DOMAIN} を GCP から到達させたくない場合 (issuer 非公開運用):
+#   Keycloak のホスト名 (GATEWAY_AUTH_HOSTNAME、既定 auth.${GATEWAY_DOMAIN}) を
+#   GCP から到達させたくない場合 (issuer 非公開運用):
 #     - GCP 側は providers create-oidc に --jwk-json-path で JWKS を静的登録すれば、
 #       GCP は issuer に一切アクセスしない (iss クレームの文字列一致のみで検証)。
 #     - トークン取得自体も Keycloak がホストへポート非公開のため外部URLを使わずに
@@ -39,7 +40,7 @@ AUDIENCE="${2:-https://gcp-wif.dify-security.internal/${CLIENT}}"
 
 [[ -f .env ]] || { echo "❌ .env がありません"; exit 1; }
 set -a; . ./.env; set +a
-: "${GATEWAY_DOMAIN:?}"; : "${KEYCLOAK_REALM:?}"
+: "${KEYCLOAK_REALM:?}"
 : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
 
 OUTDIR="gateway/wif"
@@ -88,7 +89,7 @@ echo "✅ client に Audience マッパーを付与 (aud=${AUDIENCE})"
 # ISSUER_URI は KC_HOSTNAME (compose.gateway.yaml) 由来で iss クレームに埋め込まれる値。
 # GCP 側 --issuer-uri / --attribute-condition の文字列一致にのみ使う識別子であり、
 # --jwk-json-path で静的検証する場合はこの URL に GCP が到達できる必要はない。
-ISSUER_URI="https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}"
+ISSUER_URI="https://${GATEWAY_AUTH_HOSTNAME}/realms/${KEYCLOAK_REALM}"
 # Keycloak はホストへポート非公開のため、外部URLではなくコンテナ内部の localhost を指す。
 # コンテナに curl/wget/python3 が無いため、呼び出し側は
 # `docker compose exec keycloak bash` の中で /dev/tcp 経由でこのパスを叩くこと

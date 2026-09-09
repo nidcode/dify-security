@@ -49,13 +49,16 @@ services:
       - ./gateway/nginx/realip:/etc/nginx/realip.d:ro
     environment:
       GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
-      # GATEWAY_PROXY_PROTOCOL は .env の値ではなく、scripts/lib/gateway.sh の
-      # gateway_render_realip が GATEWAY_TRUSTED_PROXY_IP から都度算出してエクスポートする
-      # 派生値 (.env には持たない)。そのため起動は必ず make gateway-up 経由にすること。
-      # docker compose を直接叩くと (このリポジトリの他のモード判定と同様に) 空になり、
-      # PROXY protocol を送ってくる前段プロキシがある構成では接続が壊れる。
+      # GATEWAY_DOMAIN_SUFFIX / GATEWAY_AUTH_HOSTNAME / GATEWAY_PROXY_PROTOCOL は
+      # .env の値ではなく、scripts/lib/gateway.sh の gateway_mode_init (前者2つ) /
+      # gateway_render_realip (後者) が算出してエクスポートする派生値 (.env には持たない)。
+      # そのため起動は必ず make gateway-up 経由にすること。docker compose を直接叩くと
+      # (このリポジトリの他のモード判定と同様に) 空になり、GATEWAY_DOMAIN が空 (フラットな
+      # 独立ホスト名) 構成や、PROXY protocol を送ってくる前段プロキシがある構成では壊れる。
+      GATEWAY_DOMAIN_SUFFIX: ${GATEWAY_DOMAIN_SUFFIX}
+      GATEWAY_AUTH_HOSTNAME: ${GATEWAY_AUTH_HOSTNAME}
       GATEWAY_PROXY_PROTOCOL: ${GATEWAY_PROXY_PROTOCOL}
-      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN|GATEWAY_PROXY_PROTOCOL"
+      NGINX_ENVSUBST_FILTER: "GATEWAY_DOMAIN|GATEWAY_DOMAIN_SUFFIX|GATEWAY_AUTH_HOSTNAME|GATEWAY_PROXY_PROTOCOL"
       NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
     extra_hosts:
       # 各 Dify インスタンス (ホストの EXPOSE_NGINX_PORT) へ host-gateway 経由で到達。
@@ -81,7 +84,9 @@ services:
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
       # 前段 nginx で TLS 終端するので http で動かし、公開ホスト名を明示。
-      KC_HOSTNAME: https://auth.${GATEWAY_DOMAIN}
+      # GATEWAY_AUTH_HOSTNAME は既定 auth.<GATEWAY_DOMAIN>、フラットな独立ホスト名
+      # 構成 (GATEWAY_DOMAIN 空) では .env の明示値 (例: auth01)。
+      KC_HOSTNAME: https://${GATEWAY_AUTH_HOSTNAME}
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
       # oauth2-proxy が内部 http://keycloak:8080 でトークン/JWKS を取りに来られるように

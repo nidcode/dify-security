@@ -42,18 +42,18 @@ ENTRA_CLAIM="${5:-roles}"     # roles(App ロール) | groups(セキュリティ
 
 [[ -f .env ]] || { echo "❌ .env がありません"; exit 1; }
 set -a; . ./.env; set +a
-: "${GATEWAY_DOMAIN:?}"
 
-FQDN="${SUB}.${GATEWAY_DOMAIN}"
+# compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
+# GATEWAY_DOMAIN_SUFFIX (FQDN組み立て用の派生値) をここで確定させてから使う。
+. scripts/lib/gateway.sh
+gateway_mode_init
+gateway_render_realip
+
+FQDN="${SUB}${GATEWAY_DOMAIN_SUFFIX}"
 # グループ接頭辞は .env に一元化 (gateway-grant.sh と同じ値を見る必要がある)。
 GROUP="${KEYCLOAK_GROUP_PREFIX:-aiop}-${NAME}"
 CLIENT="oauth2-proxy-${NAME}"
 AGG="gateway/oauth2-proxies.gateway.yaml"
-
-# compose 構成 / KC() / 起動前チェック / モード判定 は scripts/lib/gateway.sh に一元化。
-. scripts/lib/gateway.sh
-gateway_mode_init
-gateway_render_realip
 # 第2引数を <port> / <host>:<port> として解析 → UPSTREAM_HOST / UPSTREAM_PORT
 gateway_parse_upstream "$PORT_ARG"
 PORT="$UPSTREAM_PORT"
@@ -163,8 +163,8 @@ cat >> "$AGG" <<YAML
       - --reverse-proxy=true
       - --provider=oidc
       - --skip-oidc-discovery=true
-      - --oidc-issuer-url=https://auth.\${GATEWAY_DOMAIN}/realms/\${KEYCLOAK_REALM}
-      - --login-url=https://auth.\${GATEWAY_DOMAIN}/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/auth
+      - --oidc-issuer-url=https://\${GATEWAY_AUTH_HOSTNAME}/realms/\${KEYCLOAK_REALM}
+      - --login-url=https://\${GATEWAY_AUTH_HOSTNAME}/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/auth
       - --redeem-url=http://keycloak:8080/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/token
       - --oidc-jwks-url=http://keycloak:8080/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/certs
       - --profile-url=http://keycloak:8080/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/userinfo
@@ -196,11 +196,12 @@ fi
 if ! gateway_is_passthrough; then
 cat > "$NCONF" <<NGINX
 # 生成物 (scripts/gateway-add.sh)。sub=${SUB} → Dify upstream=${UPSTREAM_HOST}:${PORT}
-# 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN} は起動時 envsubst。
+# 共通プロキシヘッダは nginx.conf の http{} で設定済み。\${GATEWAY_DOMAIN_SUFFIX} は起動時 envsubst
+# (GATEWAY_DOMAIN が空 = フラットな独立ホスト名構成なら空文字になり ${SUB} がそのまま完全なホスト名)。
 server {
     listen 443 ssl\${GATEWAY_PROXY_PROTOCOL};
     http2 on;
-    server_name ${SUB}.\${GATEWAY_DOMAIN};
+    server_name ${SUB}\${GATEWAY_DOMAIN_SUFFIX};
 
     ssl_certificate     /etc/nginx/certs/tls.crt;
     ssl_certificate_key /etc/nginx/certs/tls.key;
@@ -298,7 +299,7 @@ cat <<EOF
   make gateway-up
 
 チェック:
-  - DNS: ${FQDN} を gateway ホストへ向ける (auth.${GATEWAY_DOMAIN} も)
+  - DNS: ${FQDN} を gateway ホストへ向ける (${GATEWAY_AUTH_HOSTNAME} も)
   - Dify 側 .env (dify/instances/${NAME}/.env) の URL を公開ドメインに:
       bash scripts/gateway-difyenv.sh ${NAME} ${SUB}
   - 認可: EntraID で ${ENTRA_CLAIM}='${ENTRA_GROUP:-<未設定>}' を対象ユーザー/グループへ割当

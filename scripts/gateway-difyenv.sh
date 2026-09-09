@@ -19,9 +19,12 @@ ENV="dify/instances/${NAME}/.env"
 [[ -f "$ENV" ]] || { echo "❌ $ENV がありません (先に make dify-new)"; exit 1; }
 [[ -f .env ]] || { echo "❌ ルート .env がありません"; exit 1; }
 set -a; . ./.env; set +a
-: "${GATEWAY_DOMAIN:?}"
+# GATEWAY_DOMAIN_SUFFIX (FQDN組み立て用の派生値) は gateway_mode_init が確定させる
+# (GATEWAY_DOMAIN が空 = フラットな独立ホスト名構成なら空文字)。
+. scripts/lib/gateway.sh
+gateway_mode_init
 
-FQDN="${SUB}.${GATEWAY_DOMAIN}"
+FQDN="${SUB}${GATEWAY_DOMAIN_SUFFIX}"
 URL="https://${FQDN}"
 
 set_env() {  # 既存行は置換、無ければ追記
