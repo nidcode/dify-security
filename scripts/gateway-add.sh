@@ -142,8 +142,15 @@ fi
 #   従い Hardcoded Group マッパーを自動付与する (手動でのUI操作が不要になる)。
 #   entraid が OIDC ブローカーなら、従来通り claim 値マッチング (roles/groups) を
 #   scripts/gateway-grant.sh に一本化して使う (kcadm -s の JSON クォート崩れを回避)。
-ENTRAID_PROVIDER_ID="$(KC get identity-provider/instances/entraid -r "$KEYCLOAK_REALM" \
-  --fields providerId --format csv 2>/dev/null | tr -d '"')"
+# entraid が未登録 (例: gateway-keycloak-init.sh がローカルユーザー運用として
+# EntraID 登録をスキップした構成) だと KC get が失敗する。set -e 下で "$()" の中身が
+# 失敗すると代入ごとスクリプトが落ちる (gateway-keycloak-init.sh:70 と同じ理由の
+# バグを避けるため、先に存在確認してから読む2段構えにする)。
+ENTRAID_PROVIDER_ID=""
+if KC get identity-provider/instances/entraid -r "$KEYCLOAK_REALM" >/dev/null 2>&1; then
+  ENTRAID_PROVIDER_ID="$(KC get identity-provider/instances/entraid -r "$KEYCLOAK_REALM" \
+    --fields providerId --format csv 2>/dev/null | tr -d '"')"
+fi
 
 if [[ "$ENTRAID_PROVIDER_ID" == "saml" ]]; then
   SAML_MAPPER="${GROUP}-allow-all"
