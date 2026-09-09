@@ -178,7 +178,13 @@ EOF
     local f
     for f in gateway/nginx/templates/team-*.conf.template; do
       [[ -e "$f" ]] || continue
-      grep -q 'listen 443 ssl;' "$f" && sed -i 's/listen 443 ssl;/listen 443 ssl${GATEWAY_PROXY_PROTOCOL};/' "$f"
+      # grep -q が「既に置き場がある(=マッチなし)」を返すと、set -e 環境下では
+      # このスクリプトの呼び出し元 (gateway-compose.sh 等) ごと無言で落ちる
+      # (grep && sed が bare statement のときの set -e の既知の挙動)。
+      # if で明示的に分岐させることで、冪等ケース(既にパッチ済み)を正常系として扱う。
+      if grep -q 'listen 443 ssl;' "$f"; then
+        sed -i 's/listen 443 ssl;/listen 443 ssl${GATEWAY_PROXY_PROTOCOL};/' "$f"
+      fi
     done
   fi
 }
