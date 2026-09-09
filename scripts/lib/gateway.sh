@@ -178,7 +178,23 @@ EOF
     local f
     for f in gateway/nginx/templates/team-*.conf.template; do
       [[ -e "$f" ]] || continue
-      grep -q 'listen 443 ssl;' "$f" && sed -i 's/listen 443 ssl;/listen 443 ssl${GATEWAY_PROXY_PROTOCOL};/' "$f"
+      # grep -q が「既に置き場がある(=マッチなし)」を返すと、set -e 環境下では
+      # このスクリプトの呼び出し元 (gateway-compose.sh 等) ごと無言で落ちる
+      # (grep && sed が bare statement のときの set -e の既知の挙動)。
+      # if で明示的に分岐させることで、冪等ケース(既にパッチ済み)を正常系として扱う。
+      if grep -q 'listen 443 ssl;' "$f"; then
+        sed -i 's/listen 443 ssl;/listen 443 ssl${GATEWAY_PROXY_PROTOCOL};/' "$f"
+      else
+        # grep の終了コード 1 (マッチ0件=既にパッチ済み) は正常系。
+        # それ以外 (例: 2 = 権限等でファイルを読めない) は握りつぶさず失敗させる
+        # (無言でスキップすると、このチームだけ ${GATEWAY_PROXY_PROTOCOL} が入らないまま
+        #  GATEWAY_TRUSTED_PROXY_IP を有効化してしまい、気づかず接続を壊しかねない)。
+        rc=$?
+        if (( rc != 1 )); then
+          echo "❌ ${f} を読み取れません (grep exit=${rc})"
+          exit 1
+        fi
+      fi
     done
   fi
 }
