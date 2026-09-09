@@ -96,6 +96,26 @@ gateway_mode_init() {
     echo "   前段で TLS 終端する場合は現状 GATEWAY_AUTH=none (素通し) のみ対応。"
     exit 1
   fi
+
+  # --- ホスト名の組み立て (派生値。.env には保存しない) -------------------------
+  # GATEWAY_DOMAIN が空 = 各インスタンスがフラットな独立ホスト名 (dify01 等、共通ドメイン
+  # 無し) の構成。この場合 "<sub>." のような余計なドットを付けないための断片。
+  # 値があれば従来通り ".<domain>" (例: teamA + .saif → teamA.saif)。
+  export GATEWAY_DOMAIN_SUFFIX="${GATEWAY_DOMAIN:+.$GATEWAY_DOMAIN}"
+
+  # Keycloak 自身の完全なホスト名。GATEWAY_AUTH_HOSTNAME で明示指定があればそれを使う。
+  # 無ければ従来通り auth.<GATEWAY_DOMAIN> から組み立てる。GATEWAY_DOMAIN が空 (フラット
+  # 方式) だと "auth." (壊れたホスト名) になってしまうため、その場合は明示指定を必須にする。
+  if [[ -n "${GATEWAY_AUTH_HOSTNAME:-}" ]]; then
+    export GATEWAY_AUTH_HOSTNAME
+  elif [[ -n "${GATEWAY_DOMAIN:-}" ]]; then
+    export GATEWAY_AUTH_HOSTNAME="auth.${GATEWAY_DOMAIN}"
+  else
+    echo "❌ GATEWAY_DOMAIN が空の場合は GATEWAY_AUTH_HOSTNAME (Keycloak 自身の完全な"
+    echo "   ホスト名。例: auth01) を .env に明示的に設定してください。"
+    exit 1
+  fi
+
   # ここでは値の検証のみ (副作用なし)。実際の nginx 向け生成物を書くのは
   # front-nginx の設定に触るスクリプト (gateway-compose.sh 等) が明示的に呼ぶ
   # gateway_render_realip の役目 (関心の分離: Keycloak 操作系スクリプトの実行が
@@ -338,17 +358,19 @@ gateway_render_passthrough_vhost() {  # usage: <sub> <port> <outfile> [upstream_
 
 # 短縮名 http://<sub>/ を FQDN の https へ寄せる。証明書が単一ラベル名を張れないため、
 # https://<sub>/ に飛ばすと証明書エラーになる。FQDN に正規化してから TLS を張らせる。
-# (301 先を解決するには <sub>.\${GATEWAY_DOMAIN} が DNS で引ける必要がある)
+# (301 先を解決するには <sub>\${GATEWAY_DOMAIN_SUFFIX} が DNS で引ける必要がある)
+# GATEWAY_DOMAIN が空 (dify01 等、フラットな独立ホスト名) なら GATEWAY_DOMAIN_SUFFIX も
+# 空になり、<sub> 自体が完全なホスト名 = この2つの server は同じ名前への 80→443 昇格になる。
 server {
     listen 80;
     server_name ${sub};
-    return 301 https://${sub}.\${GATEWAY_DOMAIN}\$request_uri;
+    return 301 https://${sub}\${GATEWAY_DOMAIN_SUFFIX}\$request_uri;
 }
 
 server {
     listen 443 ssl\${GATEWAY_PROXY_PROTOCOL};
     http2 on;
-    server_name ${sub}.\${GATEWAY_DOMAIN};
+    server_name ${sub}\${GATEWAY_DOMAIN_SUFFIX};
 
     ssl_certificate     /etc/nginx/certs/tls.crt;
     ssl_certificate_key /etc/nginx/certs/tls.key;
@@ -369,7 +391,8 @@ NGINX
 server {
     listen 80;
     # FQDN に加えて短縮ホスト名も受ける (未知の Host は引き続き 444)。
-    server_name ${sub}.\${GATEWAY_DOMAIN} ${sub};
+    # GATEWAY_DOMAIN が空なら両者は同じ文字列になる (nginx 上は無害な重複)。
+    server_name ${sub}\${GATEWAY_DOMAIN_SUFFIX} ${sub};
 
     location / {
         proxy_pass http://${up}:${port};

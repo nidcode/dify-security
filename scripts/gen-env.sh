@@ -32,6 +32,7 @@ if [[ -f .env && "$FORCE" != "--force" ]]; then
   echo ".env は既存 → 不足キーのみ補完します (既存値は保持)。全再生成は: make gen-env-force"
   # Gateway 用キー (新規追加分)。シークレットは生成、非機密は雛形値。
   ensure_kv GATEWAY_DOMAIN            "example.com"
+  ensure_kv GATEWAY_AUTH_HOSTNAME     ""
   ensure_kv KEYCLOAK_REALM           "aiop"
   ensure_kv KEYCLOAK_GROUP_PREFIX    "aiop"
   ensure_kv KEYCLOAK_ADMIN           "admin"
@@ -56,8 +57,9 @@ fi
 # 運用者入力値」(外部発行キー / 識別子) まで雛形へ巻き戻すのは事故なので引き継ぐ。
 declare -A carry=()
 if [[ -f .env && "$FORCE" == "--force" ]]; then
-  for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN KEYCLOAK_GROUP_PREFIX GATEWAY_AUTH GATEWAY_TLS \
-           GATEWAY_TRUSTED_PROXY_IP ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
+  for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN GATEWAY_AUTH_HOSTNAME KEYCLOAK_GROUP_PREFIX \
+           GATEWAY_AUTH GATEWAY_TLS GATEWAY_TRUSTED_PROXY_IP \
+           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
     line="$(grep -m1 "^${k}=" .env || true)"
     [[ -n "$line" ]] && carry["$k"]="${line#*=}"
   done

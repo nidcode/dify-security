@@ -18,7 +18,6 @@ cd "$(dirname "$0")/.."
 [[ -f .env ]] || { echo "❌ .env がありません。'make bootstrap'"; exit 1; }
 set -a; . ./.env; set +a
 
-: "${GATEWAY_DOMAIN:?GATEWAY_DOMAIN を .env に設定}"
 : "${KEYCLOAK_REALM:?KEYCLOAK_REALM を .env に設定}"
 : "${KEYCLOAK_ADMIN:?}"; : "${KEYCLOAK_ADMIN_PASSWORD:?}"
 
@@ -79,7 +78,7 @@ if ! entra_configured && [[ "$ENTRA_IDP_EXISTS" == 1 ]]; then
 elif ! entra_configured; then
   echo "⏭ ENTRA_* が未設定 (雛形値) のため IdP 'entraid' の登録をスキップしました。"
   echo "   → Keycloak ローカルユーザーでログインする構成として動作します。"
-  echo "     ユーザー作成: Keycloak 管理UI (https://auth.${GATEWAY_DOMAIN}) > Users > Add user"
+  echo "     ユーザー作成: Keycloak 管理UI (https://${GATEWAY_AUTH_HOSTNAME}) > Users > Add user"
   echo "     作成後 Groups タブで /<接頭辞>-<team> に Join させると当該インスタンスに入れます。"
   echo "   → EntraID を使う場合は .env の ENTRA_* を実値にして本スクリプトを再実行してください。"
 elif [[ "$ENTRA_IDP_EXISTS" == 1 ]]; then
@@ -113,7 +112,7 @@ cat <<EOF
 
 次にやること:
 1) EntraID (Azure ポータル) 側のアプリ登録で リダイレクト URI を追加:
-     https://auth.${GATEWAY_DOMAIN}/realms/${KEYCLOAK_REALM}/broker/entraid/endpoint
+     https://${GATEWAY_AUTH_HOSTNAME}/realms/${KEYCLOAK_REALM}/broker/entraid/endpoint
    さらに トークンにグループ/ロールを載せる設定を行う (推奨: App Roles):
      - アプリ登録 > アプリ ロール で 例) role=aiop-teamA を定義
      - エンタープライズ アプリケーション > ユーザーとグループ で
@@ -137,10 +136,10 @@ EntraID が未設定のため、ログインは Keycloak のローカルユー�
 次にやること:
 1) チーム(=Dify インスタンス)ごとに公開範囲を作成:
      bash scripts/gateway-add.sh teamA 8081
-2) 利用者を作る (Keycloak 管理UI: https://auth.${GATEWAY_DOMAIN}):
+2) 利用者を作る (Keycloak 管理UI: https://${GATEWAY_AUTH_HOSTNAME}):
      Users > Add user → Credentials タブでパスワード設定
      → Groups タブで /${KEYCLOAK_GROUP_PREFIX:-aiop}-teamA に Join
-   これで https://teamA.${GATEWAY_DOMAIN} に入れます。
+   これで https://teamA${GATEWAY_DOMAIN_SUFFIX} に入れます。
 
 後から EntraID に移行する場合は .env の ENTRA_* を実値にして本スクリプトを再実行
 (realm やグループは作り直さず、IdP 登録だけが追加されます)。

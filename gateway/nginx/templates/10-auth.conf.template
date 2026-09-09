@@ -1,10 +1,11 @@
-# Keycloak を auth.<GATEWAY_DOMAIN> で公開 (front-nginx で TLS 終端 → 内部 http)。
+# Keycloak を GATEWAY_AUTH_HOSTNAME (既定 auth.<GATEWAY_DOMAIN>、フラットな独立ホスト名
+# 構成では .env の明示値 例: auth01) で公開 (front-nginx で TLS 終端 → 内部 http)。
 # EntraID へのフェデレーション、ログイン画面、トークン/JWKS 配布はすべてここ経由。
 # 共通プロキシヘッダ (Host/X-Forwarded-*) は nginx.conf の http{} で設定済み。
 server {
     listen 443 ssl${GATEWAY_PROXY_PROTOCOL};
     http2 on;
-    server_name auth.${GATEWAY_DOMAIN};
+    server_name ${GATEWAY_AUTH_HOSTNAME};
 
     ssl_certificate     /etc/nginx/certs/tls.crt;
     ssl_certificate_key /etc/nginx/certs/tls.key;
