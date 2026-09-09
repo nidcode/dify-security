@@ -137,10 +137,39 @@ else
   echo "✅ client に groups マッパーを付与"
 fi
 
-# --- 3. (任意) EntraID → /aiop-<team> の対応付け (両パターン対応) ---
-#   実際のマッパー生成は scripts/gateway-grant.sh に一本化 (kcadm -s の JSON クォート崩れを回避)。
-#   claim=roles(B/P1: App ロール) / groups(A/Free: セキュリティグループ Object ID)。
-if [[ -n "$ENTRA_GROUP" ]]; then
+# --- 3. (任意) EntraID → /aiop-<team> の対応付け ---
+#   entraid が SAML ブローカーなら、このデプロイの方針 (認証できた社員は全員許可) に
+#   従い Hardcoded Group マッパーを自動付与する (手動でのUI操作が不要になる)。
+#   entraid が OIDC ブローカーなら、従来通り claim 値マッチング (roles/groups) を
+#   scripts/gateway-grant.sh に一本化して使う (kcadm -s の JSON クォート崩れを回避)。
+ENTRAID_PROVIDER_ID="$(KC get identity-provider/instances/entraid -r "$KEYCLOAK_REALM" \
+  --fields providerId --format csv 2>/dev/null | tr -d '"')"
+
+if [[ "$ENTRAID_PROVIDER_ID" == "saml" ]]; then
+  SAML_MAPPER="${GROUP}-allow-all"
+  MROW="$(KC get identity-provider/instances/entraid/mappers -r "$KEYCLOAK_REALM" \
+            --fields id,name --format csv 2>/dev/null | grep ",\"${SAML_MAPPER}\"$" || true)"
+  if [[ -n "$MROW" ]]; then
+    echo "ℹ SAMLマッパー '$SAML_MAPPER' は既に存在 (スキップ)"
+  else
+    # Hardcoded Group: provider ID は "oidc-" 接頭辞だが getCompatibleProviders()=ANY_PROVIDER
+    # のため SAML ブローカーにもそのまま使える (Keycloak本体唯一の実装、SAML専用版は無い)。
+    BODY=$(cat <<JSON
+{
+  "name": "${SAML_MAPPER}",
+  "identityProviderAlias": "entraid",
+  "identityProviderMapper": "oidc-hardcoded-group-idp-mapper",
+  "config": {
+    "syncMode": "FORCE",
+    "group": "/${GROUP}"
+  }
+}
+JSON
+)
+    printf '%s' "$BODY" | KC create identity-provider/instances/entraid/mappers -r "$KEYCLOAK_REALM" -f - >/dev/null
+    echo "✅ SAML: entraidで認証できたユーザーは全員 /${GROUP} に入れるようにしました"
+  fi
+elif [[ -n "$ENTRA_GROUP" ]]; then
   bash scripts/gateway-grant.sh "$NAME" "$ENTRA_GROUP" "$ENTRA_CLAIM"
 else
   echo "ℹ ENTRA_GROUP 未指定 → 公開範囲(部署割当)は後で付与する:"
