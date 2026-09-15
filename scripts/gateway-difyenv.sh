@@ -34,12 +34,19 @@ set_env() {  # 既存行は置換、無ければ追記
 }
 
 set_env NGINX_SERVER_NAME "$FQDN"
-# CONSOLE_WEB_URL/APP_WEB_URL/FILES_URL/SERVICE_API_URL は表示・署名用途のみ
-# (このプロセス自身がその値へ通信するわけではない) なので $URL を書いて問題ない。
+# CONSOLE_WEB_URL/APP_WEB_URL/FILES_URL/SERVICE_API_URL/TRIGGER_URL/
+# ENDPOINT_URL_TEMPLATE/NEXT_PUBLIC_SOCKET_URL は表示・署名・外部コールバック
+# 生成用のみ (このプロセス自身がその値へ通信するわけではない) なので $URL を
+# 書いて問題ない。既定値が http(s)://localhost 系のまま放置すると、
+# Webhook/トリガーURLの表示や、コラボレーション用WebSocket接続が
+# 実運用で壊れる (自分自身のlocalhostに繋ぎに行ってしまう) ため明示する。
 set_env CONSOLE_WEB_URL   "$URL"
 set_env SERVICE_API_URL   "$URL"
 set_env APP_WEB_URL       "$URL"
 set_env FILES_URL         "$URL"
+set_env TRIGGER_URL       "$URL"
+set_env ENDPOINT_URL_TEMPLATE "${URL}/e/{hook_id}"
+set_env NEXT_PUBLIC_SOCKET_URL "wss://${FQDN}"
 # CONSOLE_API_URL/APP_API_URL は意図的に空のままにする (Dify側の実装):
 #   - ブラウザからのfetchはこれが空だと相対パス化され、アクセスしたオリジンに
 #     自動で追従するので単一オリジン構成では実害なし。
@@ -57,7 +64,7 @@ set_env SERVER_CONSOLE_API_URL "http://api:5001"
 # TLS は front-nginx で終端。インスタンス側 nginx は http のまま。
 set_env NGINX_HTTPS_ENABLED "false"
 
-echo "✅ $ENV を $URL 用に更新 (NGINX_SERVER_NAME / CONSOLE_WEB_URL / SERVICE_API_URL / APP_WEB_URL / FILES_URL)"
+echo "✅ $ENV を $URL 用に更新 (NGINX_SERVER_NAME / CONSOLE_WEB_URL / SERVICE_API_URL / APP_WEB_URL / FILES_URL / TRIGGER_URL / ENDPOINT_URL_TEMPLATE / NEXT_PUBLIC_SOCKET_URL)"
 echo "   CONSOLE_API_URL / APP_API_URL は意図的に未設定のままにしています"
 echo "   (Notion連携等、Dify自身が外部へ渡す絶対URLが要る機能を使うなら別途検討要)。"
 echo "   反映: cd dify/instances/${NAME} && docker compose up -d"
