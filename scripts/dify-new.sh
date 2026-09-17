@@ -103,7 +103,11 @@ set_env DIFY_AGENT_API_TOKEN "$(rand)"
 # DIFY_AGENT_SERVER_SECRET_KEY は JWE 暗号鍵の元で「base64url デコード後ちょうど32バイト」を
 #   起動時に検証される (不一致だと agent_backend が ValidationError で起動しない)。
 set_env DIFY_AGENT_SERVER_SECRET_KEY "$(rand_key32_b64url)"
-set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$(rand)"
+# sandbox 認証トークンは 1.17 で DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN に改名 (旧名はフォールバック)。
+#   .env.example にはどちらか一方しか無く set_env は無い行をスキップするため、両方に同値を入れる。
+sandbox_token="$(rand)"
+set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$sandbox_token"       # 1.16
+set_env DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN "$sandbox_token"  # 1.17+
 
 # 既定ベクタDB (weaviate) の共有既定APIキーを個別化。client(api) と server(weaviate) で一致必須。
 if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
