@@ -53,6 +53,9 @@ upsert_env() { # 置換 or 追記
   else printf '%s=%s\n' "$key" "$val" >> "$ENV"; fi
 }
 rand() { openssl rand -hex 24; }
+# 32バイト鍵の base64url (パディング無し, 43文字)。デコード後の長さまで検証される暗号鍵用。
+#   hex の rand() は base64 として読むと36バイト/hexとして読むと24バイトで、どちらも不一致になる。
+rand_key32_b64url() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; }
 
 # --- インスタンス識別 / 公開ポート ---
 # nginx HTTP のみ指定ポートで公開する。テンプレは SSL(443) とプラグインデバッグ(5003) も
@@ -97,8 +100,14 @@ set_env PLUGIN_DIFY_INNER_API_KEY "$(rand)"
 #   再生成する。特に DIFY_AGENT_SHELLCTL_AUTH_TOKEN が既定 (空) のままだと、untrusted な
 #   コードを実行する local_sandbox への shellctl API 呼び出しが無認証になる。
 set_env DIFY_AGENT_API_TOKEN "$(rand)"
-set_env DIFY_AGENT_SERVER_SECRET_KEY "$(rand)"
-set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$(rand)"
+# DIFY_AGENT_SERVER_SECRET_KEY は JWE 暗号鍵の元で「base64url デコード後ちょうど32バイト」を
+#   起動時に検証される (不一致だと agent_backend が ValidationError で起動しない)。
+set_env DIFY_AGENT_SERVER_SECRET_KEY "$(rand_key32_b64url)"
+# sandbox 認証トークンは 1.17 で DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN に改名 (旧名はフォールバック)。
+#   .env.example にはどちらか一方しか無く set_env は無い行をスキップするため、両方に同値を入れる。
+sandbox_token="$(rand)"
+set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$sandbox_token"       # 1.16
+set_env DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN "$sandbox_token"  # 1.17+
 
 # 既定ベクタDB (weaviate) の共有既定APIキーを個別化。client(api) と server(weaviate) で一致必須。
 if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
