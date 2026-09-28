@@ -206,25 +206,42 @@ fi
 
 echo ""
 echo "--- バックアップ ---"
-# 手順書03のバックアップ方式 (pg_dump + Weaviate を止めて tar) で整合が取れる構成か。
+# 手順書03のバックアップ方式 (同梱 db_postgres で pg_dump + Weaviate を止めて tar) で整合が取れる構成か。
 #   他の DB / ベクトルDB は稼働中のファイルを tar するか、named volume で tar に含まれず、
-#   戻せないバックアップになるため対象外とする。未対応なら理由を出力。
+#   外部 DB (DB_HOST) は Dify が実際に使う DB ではなくローカルの db_postgres を保存してしまい、
+#   いずれも戻せないバックアップになるため対象外とする。未対応なら理由を出力。
 backup_unsupported() {
-  local db vs
+  local db host vs
   db="$(dify_env_get "$ENV" DB_TYPE || true)"
+  host="$(dify_env_get "$ENV" DB_HOST || true)"
   vs="$(dify_env_get "$ENV" VECTOR_STORE || true)"
   if [[ "${db:-postgresql}" != "postgresql" ]]; then echo "DB_TYPE=$db"; return 0; fi
+  if [[ "${host:-db_postgres}" != "db_postgres" ]]; then echo "DB_HOST=$host"; return 0; fi
   if [[ "${vs:-weaviate}" != "weaviate" ]]; then echo "VECTOR_STORE=$vs"; return 0; fi
+  return 1
+}
+# バックアップ2点 ($DB_BAK / $FILES_BAK) が戻すのに使える状態か。
+#   取得直後の失敗に加え、再開時は世代管理での削除・移動・切り詰めも検出する。問題があれば理由を出力。
+backup_invalid() {
+  local f
+  for f in "$DB_BAK" "$FILES_BAK"; do
+    if [[ ! -f "$f" ]]; then echo "見つかりません: $f"; return 0; fi
+    if (( $(stat -c %s "$f") <= 1024 )); then echo "小さすぎます: $f"; return 0; fi
+    if ! gzip -t "$f" 2>/dev/null; then echo "壊れています (gzip -t 失敗): $f"; return 0; fi
+  done
   return 1
 }
 BACKUP_DIR="$(root_env BACKUP_DIR)"
 [[ -z "$BACKUP_DIR" ]] || BACKUP_DIR="$(realpath -m "$BACKUP_DIR")"
-if (( RESUME )); then
+# 構成の確認は再開時も行う (中断後に DB_HOST 等が変わった場合や、この確認より前の版の
+# スクリプトが作った目印では、前回のバックアップが Dify の実際の DB ではない可能性があるため)
+if reason="$(backup_unsupported)"; then
+  echo "  ❌ $reason は未対応 (手順書03のバックアップは同梱 Postgres + Weaviate 前提)"
+elif (( RESUME )); then
   echo "  前回取得したものを使う (取り直さない)"
   echo "    DB:       $DB_BAK"
   echo "    ファイル: $FILES_BAK"
-elif reason="$(backup_unsupported)"; then
-  echo "  ❌ $reason は未対応 (手順書03のバックアップは Postgres + Weaviate 前提)"
+  if reason="$(backup_invalid)"; then echo "  ❌ 前回のバックアップが使えません: $reason"; fi
 elif [[ -z "$BACKUP_DIR" ]]; then
   echo "  ❌ ルート .env の BACKUP_DIR が未設定 (--apply には必須)"
 else
@@ -242,11 +259,18 @@ fi
 # ここから --apply
 # =============================================================================
 echo ""
+if backup_unsupported >/dev/null; then exit 1; fi   # 新規・再開とも (理由は計画表示に出力済み)
 if (( RESUME )); then
   echo "==> 1/5 バックアップ (前回のものを使う)"
+  # 切り戻せない状態で更新 (マイグレーション) を続けないよう、再開前に必ず検証する。
+  #   目印があるのでインスタンスは更新前か途中か分からず、ここで取り直しても更新前の状態は得られない。
+  if reason="$(backup_invalid)"; then
+    echo "❌ 前回のバックアップが使えないため再開しません: $reason"
+    echo "   インスタンスが更新途中の可能性があり、自動では判断できません。この表示を控えてベンダーに連絡すること。"
+    exit 1
+  fi
 else
   [[ -n "$BACKUP_DIR" ]] || exit 1
-  if backup_unsupported >/dev/null; then exit 1; fi
   running="$(dc ps --status running --services)"
   grep -qx db_postgres <<< "$running" || {
     echo "❌ db_postgres が起動していません (バックアップに必要)。起動してから再実行: cd $DST && docker compose up -d"
@@ -273,9 +297,7 @@ else
     --exclude='volumes/db' --exclude='volumes/redis' --exclude='volumes/sandbox' .) || rc=$?
   if (( weaviate_running )); then dc start weaviate; fi
   (( rc <= 1 )) || { echo "❌ tar が失敗しました (rc=$rc)"; exit 1; }   # 1 = 読み取り中に変化したファイルあり (警告)
-  for f in "$DB_BAK" "$FILES_BAK"; do
-    (( $(stat -c %s "$f") > 1024 )) || { echo "❌ バックアップが小さすぎます: $f"; exit 1; }
-  done
+  if reason="$(backup_invalid)"; then echo "❌ バックアップに失敗しました: $reason"; exit 1; fi
   ls -lh "$DB_BAK" "$FILES_BAK"
   printf 'FROM=%s\nTO=%s\nDB_BAK=%s\nFILES_BAK=%s\n' "$FROM" "$TO" "$DB_BAK" "$FILES_BAK" > "$PENDING"
 fi
