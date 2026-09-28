@@ -116,11 +116,22 @@ if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
   upsert_env WEAVIATE_AUTHENTICATION_APIKEY_ALLOWED_KEYS "$wv_key"
 fi
 
+# --- メール送信 (SMTP) : ルート .env の共通設定を転記 (MAIL_TYPE 未設定なら何もしない) ---
+#   テンプレの .env.example には MAIL_*/SMTP_* が無いが、compose の env_file は ./.env を
+#   最後に読む (= 最優先) ため、インスタンス .env へ書けば api/worker に届く。
+. scripts/lib/dify-mail.sh
+if [[ -f .env ]] && dify_mail_copy .env "$ENV"; then
+  mail_msg="メール送信設定をルート .env から転記"
+else
+  mail_msg="メール送信は未設定 (ルート .env の MAIL_TYPE が空)"
+fi
+
 # .env は機密 (生成した全パスワードを含む) → 権限を絞る
 chmod 600 "$ENV"
 
 echo "✅ 作成: $DST  (project=dify-$NAME / port=$PORT)"
 echo "   機密再生成: SECRET_KEY / INIT_PASSWORD / DB / Redis / Sandbox / Plugin / Agent 鍵"
+echo "   ${mail_msg}"
 echo "   INIT_PASSWORD (管理者登録用) は控えておく:"
 echo "     grep '^INIT_PASSWORD=' $ENV"
 echo "   起動: cd $DST && docker compose up -d      → http://localhost:$PORT"
