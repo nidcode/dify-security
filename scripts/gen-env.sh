@@ -56,10 +56,11 @@ fi
 # --force で既存 .env を作り直す際、シークレットは再生成してよいが「再生成できない
 # 運用者入力値」(外部発行キー / 識別子) まで雛形へ巻き戻すのは事故なので引き継ぐ。
 declare -A carry=()
+. scripts/lib/dify-mail.sh   # DIFY_MAIL_KEYS (メール送信設定も運用者入力値)
 if [[ -f .env && "$FORCE" == "--force" ]]; then
   for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN GATEWAY_AUTH_HOSTNAME KEYCLOAK_GROUP_PREFIX \
            GATEWAY_AUTH GATEWAY_TLS GATEWAY_TRUSTED_PROXY_IP \
-           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET; do
+           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET "${DIFY_MAIL_KEYS[@]}"; do
     line="$(grep -m1 "^${k}=" .env || true)"
     [[ -n "$line" ]] && carry["$k"]="${line#*=}"
   done
