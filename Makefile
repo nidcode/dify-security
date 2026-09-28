@@ -44,7 +44,7 @@ dify-new: ## Dify インスタンスを新規作成 (make dify-new NAME=teamA PO
 # --- 中央スタック (LiteLLM) -----------------------------------------------
 up: ## LiteLLM を起動
 	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
-	$(LITELLM) up -d
+	$(LITELLM) up -d $(UP_FLAGS)
 	@echo "✅ LiteLLM 起動。Dify は 'cd dify/instances/<name> && docker compose up -d'"
 
 down: ## LiteLLM を停止 (Dify は各フォルダで docker compose down)
