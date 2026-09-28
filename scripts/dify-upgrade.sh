@@ -312,6 +312,7 @@ cat "$MERGED" > "$ENV"
 echo "==> 3/5 テンプレートの更新分を反映"
 rsync -a "${RSYNC_OPTS[@]}" "$SRC/" "$DST/"
 dify_install_shared_files "$DST"
+dify_install_log_config "$DST"   # 新バージョンで増減したサービスに追随
 
 echo "==> 4/5 前段公開用の設定を再調整"
 if [[ -n "$gw_sub" ]]; then bash scripts/gateway-difyenv.sh "$NAME" "$gw_sub"; else echo "  (対象外)"; fi

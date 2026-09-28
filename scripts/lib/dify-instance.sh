@@ -122,3 +122,79 @@ dify_env_sync_derived() {                                                # <env>
     sed -i "s#\(redis://[^:@/]*:\)[^@]*@#\1${pw}@#g" "$env"
   fi
 }
+
+# --- ログの保存 (監査・トラブル対応) --------------------------------------------
+# 各サービスのログを、コンテナ内ではなくインスタンスの logs/<サービス>/ に保存する
+# (コンテナを作り直しても消えず、バックアップ対象になる)。ローテーションはホストの
+# logrotate (dify/logrotate/ → /etc/logrotate.d/dify-*) が行う。
+#   "サービス名 コンテナ内のログディレクトリ 書き込みuid"
+DIFY_LOG_SERVICES=(
+  "api /app/logs 1001"                    # Dify 本体 (LOG_FILE)。uid は公式 init_permissions と同じ
+  "api_websocket /app/logs 1001"
+  "worker /app/logs 1001"
+  "worker_beat /app/logs 1001"
+  "nginx /var/log/nginx 0"                # 公式イメージは stdout へのリンク → マウントで実ファイルになる
+  "ssrf_proxy /var/log/squid 13"          # squid (proxy ユーザー)。所有者が違うと起動に失敗する
+  "agent_ssrf_proxy /var/log/squid 13"
+  "model_egress_guard /var/log/squid 13"
+)
+DIFY_LOG_COMPOSE_FILE="docker-compose.logs.yaml"
+
+# <dir> (インスタンス) にログ保存用の compose ファイルを生成し、.env の COMPOSE_FILE で読み込ませる (冪等)。
+#   公式の compose / 共通 override には手を入れない (疎結合)。存在するサービスだけを対象にするため、
+#   Dify のバージョンでサービスが増減しても追随する (dify-upgrade.sh が更新後に再生成する)。
+dify_install_log_config() {
+  local dir="$1" entry svc path uid perms="" gid
+  # ログのグループ = インスタンスのフォルダのグループ (dify-new.sh を実行した運用ユーザー)。
+  # 各サービスのログを運用ユーザーで読める = バックアップ (手順書03の tar) で読み飛ばされない。
+  # logs/ のグループを使わないのは、sudo で実行されると logs/ が root で作られるため。
+  gid="$(stat -c %g "$dir")"
+  mkdir -p "$dir/logs"
+  {
+    echo "# 自動生成 (scripts/lib/dify-instance.sh の dify_install_log_config)。手で編集しない。"
+    echo "# 各サービスのログを ./logs/<サービス>/ に保存する。ローテーションはホストの logrotate。"
+    echo "services:"
+    for entry in "${DIFY_LOG_SERVICES[@]}"; do
+      read -r svc path uid <<< "$entry"
+      grep -qE "^  ${svc}:[[:space:]]*$" "$dir/docker-compose.yaml" "$dir/docker-compose.override.yaml" 2>/dev/null || continue
+      perms+=" $svc:$uid"
+      cat <<YAML
+  $svc:
+    volumes:
+      - ./logs/$svc:$path
+    depends_on:
+      log_permissions:
+        condition: service_completed_successfully
+YAML
+      if [[ "$path" == "/app/logs" ]]; then
+        cat <<YAML
+    environment:
+      LOG_FILE: /app/logs/server.log
+      # Dify 自身のローテーションは 0 (無効) を受け付けない (PositiveInt) ため上限を大きく取り、
+      # 日次の logrotate に任せる (1024MB は安全装置)
+      LOG_FILE_MAX_SIZE: "1024"
+YAML
+      fi
+    done
+    cat <<YAML
+  # ログディレクトリの所有者を各サービスの書き込みユーザーに、グループを運用ユーザー (gid $gid)
+  # にそろえる。setgid によりサービスが作るファイルも運用ユーザーで読める。
+  # -R はリストア (tar 展開で所有者が運用ユーザーになる) 後の修復のため。
+  log_permissions:
+    image: busybox:latest
+    restart: "no"
+    volumes:
+      - ./logs:/logs
+    command:
+      - sh
+      - -c
+      - |
+        g=$gid
+        for e in${perms}; do
+          d=/logs/\$\${e%%:*}; u=\$\${e##*:}
+          mkdir -p "\$\$d" && chown -R "\$\$u:\$\$g" "\$\$d" && chmod 2750 "\$\$d"
+        done
+YAML
+  } > "$dir/$DIFY_LOG_COMPOSE_FILE"
+  dify_env_upsert "$dir/.env" COMPOSE_FILE "docker-compose.yaml:docker-compose.override.yaml:$DIFY_LOG_COMPOSE_FILE"
+}
