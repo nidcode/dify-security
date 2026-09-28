@@ -1,0 +1,15 @@
+# Dify インスタンス内 nginx のアクセス/エラーログ。全インスタンス分。
+#   scripts/log-setup.sh dify --apply が @REPO_DIR@ を置換して /etc/logrotate.d/dify-nginx に配置する (root 所有必須)。
+#   保持期間 (rotate = 日数) などは配置先のファイルを直接変更してよい (再実行しても上書きしない)。
+#   copytruncate: アプリにファイルを開き直させずに済む (squid / nginx / Dify で共通の方式)。
+@REPO_DIR@/dify/instances/*/logs/nginx/*.log
+{
+    daily
+    rotate 90
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    copytruncate
+}

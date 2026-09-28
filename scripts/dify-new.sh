@@ -68,6 +68,9 @@ else
   mail_msg="メール送信は未設定 (ルート .env の MAIL_TYPE が空)"
 fi
 
+# --- ログをインスタンスの logs/ に保存 (compose ファイル生成 + .env の COMPOSE_FILE) ---
+dify_install_log_config "$DST"
+
 # .env は機密 (生成した全パスワードを含む) → 権限を絞る
 chmod 600 "$ENV"
 

@@ -34,5 +34,8 @@ gateway/nginx/templates/local-*.conf.template
 # WIF 用 Keycloak client secret (scripts/gateway-wif-client.sh の生成物)
 gateway/wif/
 
+# ホストに保存するログ (scripts/log-setup.sh / compose.gateway.yaml)。Dify は各インスタンスの logs/
+/logs/
+
 # OS
 .DS_Store

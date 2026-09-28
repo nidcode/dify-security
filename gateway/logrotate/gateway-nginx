@@ -1,0 +1,15 @@
+# Gateway の front-nginx のアクセス/エラーログ。
+#   scripts/log-setup.sh gateway --apply が @REPO_DIR@ を置換して /etc/logrotate.d/gateway-nginx に配置する (root 所有必須)。
+#   保持期間 (rotate = 日数) などは配置先のファイルを直接変更してよい (再実行しても上書きしない)。
+#   copytruncate: アプリにファイルを開き直させずに済む (squid / nginx / Dify で共通の方式)。
+@REPO_DIR@/logs/gateway/nginx/*.log
+{
+    daily
+    rotate 90
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    copytruncate
+}
