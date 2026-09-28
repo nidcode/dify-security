@@ -49,14 +49,34 @@ ver_of() { grep -m1 -oE 'langgenius/dify-api:[^"[:space:]]+' "$1/docker-compose.
 FROM="$(ver_of "$DST" || true)"
 TO="$(ver_of "$SRC" || true)"
 [[ -n "$FROM" && -n "$TO" ]] || { echo "❌ バージョンを判定できません (docker-compose.yaml の dify-api イメージ)"; exit 1; }
-echo "==> $NAME: Dify $FROM → $TO"
-if [[ "$FROM" == "$TO" ]]; then
-  echo "  テンプレートと同じバージョンです。何もしません。"
-  exit 0
-fi
-if [[ "$(printf '%s\n%s\n' "$FROM" "$TO" | sort -V | tail -n1)" != "$TO" ]]; then
-  echo "❌ ダウングレードはできません (Dify の DB マイグレーションは戻せない)。"
-  exit 1
+
+# 更新中の目印 (--apply のバックアップ直後に作成し、完了時に削除)。
+#   テンプレ反映後に失敗すると compose のタグは既に新版のため、タグだけでは完了と区別できない。
+#   目印があれば前回の続きから再開する (バックアップは取り直さない = 更新前の状態を保持するため)。
+PENDING="$DST/.dify-upgrade-pending"
+RESUME=0
+if [[ -f "$PENDING" ]]; then
+  RESUME=1
+  FROM="$(dify_env_get "$PENDING" FROM)"
+  pending_to="$(dify_env_get "$PENDING" TO)"
+  DB_BAK="$(dify_env_get "$PENDING" DB_BAK)"
+  FILES_BAK="$(dify_env_get "$PENDING" FILES_BAK)"
+  echo "==> $NAME: 前回の更新 (Dify $FROM → $pending_to) が完了していません。--apply で続きから再開します。"
+  if [[ "$pending_to" != "$TO" ]]; then
+    echo "❌ テンプレートの版 ($TO) が前回の更新先 ($pending_to) と異なります。"
+    echo "   手順書03のリストアで更新前に戻し、$PENDING を削除してから実行し直すこと。"
+    exit 1
+  fi
+else
+  echo "==> $NAME: Dify $FROM → $TO"
+  if [[ "$FROM" == "$TO" ]]; then
+    echo "  テンプレートと同じバージョンです。何もしません。"
+    exit 0
+  fi
+  if [[ "$(printf '%s\n%s\n' "$FROM" "$TO" | sort -V | tail -n1)" != "$TO" ]]; then
+    echo "❌ ダウングレードはできません (Dify の DB マイグレーションは戻せない)。"
+    exit 1
+  fi
 fi
 
 # --- 1. .env の3方向マージ (結果は一時ファイルに作り、--apply 時だけ反映) ---
@@ -186,11 +206,28 @@ fi
 
 echo ""
 echo "--- バックアップ ---"
+# 手順書03のバックアップ方式 (pg_dump + Weaviate を止めて tar) で整合が取れる構成か。
+#   他の DB / ベクトルDB は稼働中のファイルを tar するか、named volume で tar に含まれず、
+#   戻せないバックアップになるため対象外とする。未対応なら理由を出力。
+backup_unsupported() {
+  local db vs
+  db="$(dify_env_get "$ENV" DB_TYPE || true)"
+  vs="$(dify_env_get "$ENV" VECTOR_STORE || true)"
+  if [[ "${db:-postgresql}" != "postgresql" ]]; then echo "DB_TYPE=$db"; return 0; fi
+  if [[ "${vs:-weaviate}" != "weaviate" ]]; then echo "VECTOR_STORE=$vs"; return 0; fi
+  return 1
+}
 BACKUP_DIR="$(root_env BACKUP_DIR)"
-if [[ -z "$BACKUP_DIR" ]]; then
+[[ -z "$BACKUP_DIR" ]] || BACKUP_DIR="$(realpath -m "$BACKUP_DIR")"
+if (( RESUME )); then
+  echo "  前回取得したものを使う (取り直さない)"
+  echo "    DB:       $DB_BAK"
+  echo "    ファイル: $FILES_BAK"
+elif reason="$(backup_unsupported)"; then
+  echo "  ❌ $reason は未対応 (手順書03のバックアップは Postgres + Weaviate 前提)"
+elif [[ -z "$BACKUP_DIR" ]]; then
   echo "  ❌ ルート .env の BACKUP_DIR が未設定 (--apply には必須)"
 else
-  BACKUP_DIR="$(realpath -m "$BACKUP_DIR")"
   echo "  $BACKUP_DIR/dify-$NAME-{db,files}-<日付>-pre-upgrade-<時刻>.*  (手順書03と同形式)"
 fi
 
@@ -204,41 +241,48 @@ fi
 # =============================================================================
 # ここから --apply
 # =============================================================================
-[[ -n "$BACKUP_DIR" ]] || exit 1
-db_type="$(dify_env_get "$ENV" DB_TYPE || echo postgresql)"
-[[ "$db_type" == "postgresql" ]] || { echo "❌ DB_TYPE=$db_type は未対応 (手順書03のバックアップは Postgres 前提)"; exit 1; }
-running="$(dc ps --status running --services)"
-grep -qx db_postgres <<< "$running" || {
-  echo "❌ db_postgres が起動していません (バックアップに必要)。起動してから再実行: cd $DST && docker compose up -d"
-  exit 1
-}
-
 echo ""
-echo "==> 1/5 バックアップ"
-mkdir -p "$BACKUP_DIR"
-umask 077   # バックアップは DB 内容と .env (全機密) を含む → 本人のみ読める権限で作る
-stamp="$(date +%F)-pre-upgrade-$(date +%H%M%S)"
-DB_BAK="$BACKUP_DIR/dify-$NAME-db-$stamp.sql.gz"
-FILES_BAK="$BACKUP_DIR/dify-$NAME-files-$stamp.tar.gz"
-# パスワードは環境変数で渡す (コマンド引数に書くと ps で他ユーザーから見えるため)
-PGPASSWORD="$(dify_env_get "$ENV" DB_PASSWORD)" dc exec -T -e PGPASSWORD db_postgres \
-  pg_dump -U postgres --clean --if-exists dify | gzip > "$DB_BAK"
-# Weaviate は稼働中のファイルを直接コピーすると不整合になり得るため、コピー中だけ一時停止 (手順書03と同じ)
-weaviate_running=0
-if grep -qx weaviate <<< "$running"; then weaviate_running=1; dc stop weaviate; fi
-rc=0
-(cd "$DST" && tar czf "$FILES_BAK" --ignore-failed-read \
-  --exclude='volumes/db' --exclude='volumes/redis' --exclude='volumes/sandbox' .) || rc=$?
-if (( weaviate_running )); then dc start weaviate; fi
-(( rc <= 1 )) || { echo "❌ tar が失敗しました (rc=$rc)"; exit 1; }   # 1 = 読み取り中に変化したファイルあり (警告)
-for f in "$DB_BAK" "$FILES_BAK"; do
-  (( $(stat -c %s "$f") > 1024 )) || { echo "❌ バックアップが小さすぎます: $f"; exit 1; }
-done
-ls -lh "$DB_BAK" "$FILES_BAK"
+if (( RESUME )); then
+  echo "==> 1/5 バックアップ (前回のものを使う)"
+else
+  [[ -n "$BACKUP_DIR" ]] || exit 1
+  if backup_unsupported >/dev/null; then exit 1; fi
+  running="$(dc ps --status running --services)"
+  grep -qx db_postgres <<< "$running" || {
+    echo "❌ db_postgres が起動していません (バックアップに必要)。起動してから再実行: cd $DST && docker compose up -d"
+    exit 1
+  }
+
+  echo "==> 1/5 バックアップ"
+  mkdir -p "$BACKUP_DIR"
+  umask 077   # バックアップは DB 内容と .env (全機密) を含む → 本人のみ読める権限で作る
+  stamp="$(date +%F)-pre-upgrade-$(date +%H%M%S)"
+  DB_BAK="$BACKUP_DIR/dify-$NAME-db-$stamp.sql.gz"
+  FILES_BAK="$BACKUP_DIR/dify-$NAME-files-$stamp.tar.gz"
+  # 接続ユーザー/DB 名は compose と同じく .env の値 (未設定なら compose の既定)。
+  # パスワードは環境変数で渡す (コマンド引数に書くと ps で他ユーザーから見えるため)。
+  db_user="$(dify_env_get "$ENV" DB_USERNAME || true)"
+  db_name="$(dify_env_get "$ENV" DB_DATABASE || true)"
+  PGPASSWORD="$(dify_env_get "$ENV" DB_PASSWORD)" dc exec -T -e PGPASSWORD db_postgres \
+    pg_dump -U "${db_user:-postgres}" --clean --if-exists "${db_name:-dify}" | gzip > "$DB_BAK"
+  # Weaviate は稼働中のファイルを直接コピーすると不整合になり得るため、コピー中だけ一時停止 (手順書03と同じ)
+  weaviate_running=0
+  if grep -qx weaviate <<< "$running"; then weaviate_running=1; dc stop weaviate; fi
+  rc=0
+  (cd "$DST" && tar czf "$FILES_BAK" --ignore-failed-read \
+    --exclude='volumes/db' --exclude='volumes/redis' --exclude='volumes/sandbox' .) || rc=$?
+  if (( weaviate_running )); then dc start weaviate; fi
+  (( rc <= 1 )) || { echo "❌ tar が失敗しました (rc=$rc)"; exit 1; }   # 1 = 読み取り中に変化したファイルあり (警告)
+  for f in "$DB_BAK" "$FILES_BAK"; do
+    (( $(stat -c %s "$f") > 1024 )) || { echo "❌ バックアップが小さすぎます: $f"; exit 1; }
+  done
+  ls -lh "$DB_BAK" "$FILES_BAK"
+  printf 'FROM=%s\nTO=%s\nDB_BAK=%s\nFILES_BAK=%s\n' "$FROM" "$TO" "$DB_BAK" "$FILES_BAK" > "$PENDING"
+fi
 
 # 以降で失敗したら、切り戻しに使うファイルを案内する
 set -E
-trap 'echo ""; echo "❌ 失敗しました (上のエラーを確認)。切り戻しは手順書03「① Dify VM > リストア (同一VM上)」で次の2ファイルを使う:"; echo "   DB:       $DB_BAK"; echo "   ファイル: $FILES_BAK"' ERR
+trap 'echo ""; echo "❌ 失敗しました (上のエラーを確認)。"; echo "   原因を取り除いて同じコマンドを再実行すると、続きから再開する (バックアップは取り直さない)。"; echo "   切り戻す場合は手順書03「① Dify VM > リストア (同一VM上)」で次の2ファイルを使い、$PENDING を削除する:"; echo "   DB:       $DB_BAK"; echo "   ファイル: $FILES_BAK"' ERR
 
 echo "==> 2/5 .env を更新"
 cat "$MERGED" > "$ENV"
@@ -277,6 +321,7 @@ if dc logs --since "$started" api 2>&1 | grep -qE 'Traceback|ERROR'; then
   dc logs --since "$started" api 2>&1 | grep -E -A3 'Traceback|ERROR' | tail -n 20
 fi
 
+rm -f "$PENDING"
 echo ""
 echo "✅ $NAME を Dify $TO に更新しました。"
 echo "   確認: ブラウザでログインし、既存のアプリ・ナレッジベースが開けること"
