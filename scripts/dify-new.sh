@@ -13,6 +13,7 @@
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/lib/dify-instance.sh
 
 NAME="${1:?usage: dify-new.sh <name> <port>}"
 PORT="${2:?usage: dify-new.sh <name> <port>}"
@@ -29,33 +30,15 @@ ENV="$DST/.env"
 
 mkdir -p dify/instances
 cp -R "$SRC" "$DST"
-# host-gateway 経由で LiteLLM に到達するための override (全インスタンス共通)
-cp dify/compose.override.yaml "$DST/docker-compose.override.yaml"
-# 主要モデルプロバイダへの直接到達を既定で遮断するプロキシ一式 (全インスタンス共通)
-mkdir -p "$DST/model-egress-guard"
-cp -R dify/model-egress-guard/. "$DST/model-egress-guard/"
+dify_install_shared_files "$DST"   # override / model-egress-guard (全インスタンス共通)
 
 # .env は機密のため追跡されない (テンプレには .env.example のみ)。
 # 複製後に .env が無ければ .env.example から用意する。
 [[ -f "$ENV" ]] || cp "$DST/.env.example" "$ENV"
 
-# .env の KEY=... を書き換え。無い KEY はスキップ (バージョン差異に強い)。
-# 値は hex/base64 のみ → sed 区切り | と競合しない。
-set_env() {   # 既存行のみ置換 (無ければスキップ)
-  local key="$1" val="$2"
-  if grep -q "^${key}=" "$ENV"; then
-    sed -i "s|^${key}=.*|${key}=${val}|" "$ENV"
-  fi
-}
-upsert_env() { # 置換 or 追記
-  local key="$1" val="$2"
-  if grep -q "^${key}=" "$ENV"; then sed -i "s|^${key}=.*|${key}=${val}|" "$ENV";
-  else printf '%s=%s\n' "$key" "$val" >> "$ENV"; fi
-}
-rand() { openssl rand -hex 24; }
-# 32バイト鍵の base64url (パディング無し, 43文字)。デコード後の長さまで検証される暗号鍵用。
-#   hex の rand() は base64 として読むと36バイト/hexとして読むと24バイトで、どちらも不一致になる。
-rand_key32_b64url() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; }
+# .env の KEY=... を書き換え (実体は lib/dify-instance.sh)。
+set_env()    { dify_env_set    "$ENV" "$@"; }   # 既存行のみ置換 (無ければスキップ)
+upsert_env() { dify_env_upsert "$ENV" "$@"; }   # 置換 or 追記
 
 # --- インスタンス識別 / 公開ポート ---
 # nginx HTTP のみ指定ポートで公開する。テンプレは SSL(443) とプラグインデバッグ(5003) も
@@ -68,53 +51,12 @@ set_env EXPOSE_PLUGIN_DEBUGGING_PORT "127.0.0.1:" # → "127.0.0.1::5003" (同�
 upsert_env COMPOSE_PROJECT_NAME "dify-${NAME,,}"
 
 # --- 機密値をインスタンス固有に再生成 ---
-set_env SECRET_KEY "$(openssl rand -base64 42 | tr -d '\n=' )"
-# INIT_PASSWORD は Dify の /console/api/init が最大30文字を課すため hex 12(=24文字) で生成。
-#   rand()=hex24=48文字 だと正しい値でも 422 validation error で入力不能になる。
-set_env INIT_PASSWORD "$(openssl rand -hex 12)"   # 管理者登録ページのゲート (30文字以内必須)
-set_env DB_PASSWORD "$(rand)"            # Postgres (URL は各パーツから構築される)
-
-# Redis: パスワード本体 + それをインライン埋め込みする URL(CELERY_BROKER_URL 等) を同値に揃える
-redis_pw="$(rand)"
-set_env REDIS_PASSWORD "$redis_pw"
-sed -i "s#\(redis://[^:@/]*:\)[^@]*@#\1${redis_pw}@#g" "$ENV"
-
-# サンドボックス鍵は sandbox 側と api 側 (CODE_EXECUTION_API_KEY) で一致必須 → 同値を投入
-sandbox_key="$(rand)"
-set_env SANDBOX_API_KEY "$sandbox_key"
-set_env CODE_EXECUTION_API_KEY "$sandbox_key"
-
-# プラグイン基盤の相互認証鍵 (存在すれば)。
-#   compose は PLUGIN_DIFY_INNER_API_KEY を api(INNER_API_KEY_FOR_PLUGIN) と
-#   plugin_daemon(DIFY_INNER_API_KEY) の双方へ供給する = これがテンプレ側の実キー。
-#   .env に INNER_API_KEY_FOR_PLUGIN は存在しない (set_env が無音スキップし既定鍵が残る) ため、
-#   PLUGIN_DIFY_INNER_API_KEY を再生成する。
-set_env PLUGIN_DAEMON_KEY "$(rand)"
-set_env PLUGIN_DIFY_INNER_API_KEY "$(rand)"
-
-# Dify Agent backend (1.16+, 存在すれば) の認証鍵。
-#   DIFY_AGENT_PLUGIN_DAEMON_API_KEY / DIFY_AGENT_INNER_API_KEY は .env で空のままなら
-#   compose 側の ${VAR:-${PLUGIN_DAEMON_KEY:-既定}} 等のフォールバックで上の再生成値を
-#   自動的に引き継ぐため、ここでは触らない。一方、以下の3つは .env.example に開発用の
-#   固定値 (公開リポジトリで既知) が直接入っており、フォールバックが効かないため個別に
-#   再生成する。特に DIFY_AGENT_SHELLCTL_AUTH_TOKEN が既定 (空) のままだと、untrusted な
-#   コードを実行する local_sandbox への shellctl API 呼び出しが無認証になる。
-set_env DIFY_AGENT_API_TOKEN "$(rand)"
-# DIFY_AGENT_SERVER_SECRET_KEY は JWE 暗号鍵の元で「base64url デコード後ちょうど32バイト」を
-#   起動時に検証される (不一致だと agent_backend が ValidationError で起動しない)。
-set_env DIFY_AGENT_SERVER_SECRET_KEY "$(rand_key32_b64url)"
-# sandbox 認証トークンは 1.17 で DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN に改名 (旧名はフォールバック)。
-#   .env.example にはどちらか一方しか無く set_env は無い行をスキップするため、両方に同値を入れる。
-sandbox_token="$(rand)"
-set_env DIFY_AGENT_SHELLCTL_AUTH_TOKEN "$sandbox_token"       # 1.16
-set_env DIFY_AGENT_LOCAL_SANDBOX_AUTH_TOKEN "$sandbox_token"  # 1.17+
-
-# 既定ベクタDB (weaviate) の共有既定APIキーを個別化。client(api) と server(weaviate) で一致必須。
-if grep -q '^WEAVIATE_API_KEY=' "$ENV"; then
-  wv_key="$(rand)"
-  set_env WEAVIATE_API_KEY "$wv_key"
-  upsert_env WEAVIATE_AUTHENTICATION_APIKEY_ALLOWED_KEYS "$wv_key"
-fi
+#   対象キーと生成規則 (桁数・形式の制約) は lib/dify-instance.sh の DIFY_SECRET_GEN に集約。
+#   .env に存在するものだけ再生成し、その後に同値必須のペアと Redis 埋め込み URL を揃える。
+for key in "${!DIFY_SECRET_GEN[@]}"; do
+  set_env "$key" "$(dify_secret_gen "$key")"
+done
+dify_env_sync_derived "$ENV"
 
 # --- メール送信 (SMTP) : ルート .env の共通設定を転記 (MAIL_TYPE 未設定なら何もしない) ---
 #   テンプレの .env.example には MAIL_*/SMTP_* が無いが、compose の env_file は ./.env を

@@ -7,6 +7,7 @@
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/lib/dify-instance.sh
 
 DIFY_VERSION="${DIFY_VERSION:-1.16.1}"
 
@@ -40,20 +41,14 @@ else
 
   # Dify の .env を作成し SECRET_KEY を生成
   cp dify/docker/.env.example dify/docker/.env
-  secret="$(openssl rand -base64 42 | tr -d '\n')"
-  esc=${secret//\\/\\\\}; esc=${esc//|/\\|}; esc=${esc//&/\\&}
-  if grep -q '^SECRET_KEY=' dify/docker/.env; then
-    sed -i.bak "s|^SECRET_KEY=.*|SECRET_KEY=${esc}|" dify/docker/.env && rm -f dify/docker/.env.bak
-  fi
+  dify_env_set dify/docker/.env SECRET_KEY "$(dify_secret_gen SECRET_KEY)"
   echo "  Dify を dify/docker/ に配置 (SECRET_KEY 生成済み)"
 fi
 
 # override をテンプレート側にも配置しておく (複製時にコピーされる) — 冪等
 if [[ -d dify/docker ]]; then
-  cp dify/compose.override.yaml dify/docker/docker-compose.override.yaml
+  dify_install_shared_files dify/docker
   echo "  docker-compose.override.yaml を配置 (host-gateway 経由で LiteLLM 到達)"
-  mkdir -p dify/docker/model-egress-guard
-  cp -R dify/model-egress-guard/. dify/docker/model-egress-guard/
   echo "  model-egress-guard を配置 (主要モデルプロバイダへの直接到達を既定で遮断)"
 fi
 
