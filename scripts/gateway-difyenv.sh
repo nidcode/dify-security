@@ -12,6 +12,7 @@
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/lib/dify-instance.sh
 
 NAME="${1:?usage: gateway-difyenv.sh <name> [subdomain]}"
 SUB="${2:-$NAME}"
@@ -40,11 +41,7 @@ else
   SUPPORTS_SERVER_CONSOLE_API_URL=0
 fi
 
-set_env() {  # 既存行は置換、無ければ追記
-  local key="$1" val="$2"
-  if grep -q "^${key}=" "$ENV"; then sed -i "s|^${key}=.*|${key}=${val}|" "$ENV";
-  else printf '%s=%s\n' "$key" "$val" >> "$ENV"; fi
-}
+set_env() { dify_env_upsert "$ENV" "$@"; }  # 既存行は置換、無ければ追記
 
 set_env NGINX_SERVER_NAME "$FQDN"
 # CONSOLE_WEB_URL/APP_WEB_URL/FILES_URL/SERVICE_API_URL/TRIGGER_URL/

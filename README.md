@@ -455,7 +455,9 @@ aiop/
 └── scripts/
     ├── bootstrap.sh
     ├── gen-env.sh
-    └── dify-new.sh           # Dify インスタンスを1つ作る (複製 + .env編集 + 機密再生成)
+    ├── dify-new.sh           # Dify インスタンスを1つ作る (複製 + .env編集 + 機密再生成)
+    ├── dify-upgrade.sh       # 既存インスタンスをテンプレの版へ更新 (バックアップ + .env マージ)
+    └── lib/                  # 共通処理 (dify-instance.sh / dify-mail.sh / gateway.sh)
 ```
 
 > エージェント乱立(agent sprawl)への統制方針・台帳・プラットフォーム別の扱い(Dify/LangGraph/Copilot)は

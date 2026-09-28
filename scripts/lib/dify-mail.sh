@@ -6,9 +6,11 @@
 #   集約する (DRY)。dify-new.sh (転記) と gen-env.sh (--force 時の引き継ぎ) が参照する。
 #
 #   使い方 (リポジトリルートへ cd した後):
-#     . scripts/lib/dify-mail.sh
+#     . scripts/lib/dify-mail.sh   (lib/dify-instance.sh も読み込まれる)
 #     dify_mail_copy .env dify/instances/<name>/.env
 # =============================================================================
+
+. scripts/lib/dify-instance.sh
 
 DIFY_MAIL_KEYS=(
   MAIL_TYPE
@@ -29,19 +31,13 @@ DIFY_MAIL_KEYS=(
 #     インスタンス .env は compose が読むが、シングルクォートは両者で同じ意味になるため
 #     値の加工 (sed エスケープ等) を一切しない。
 dify_mail_copy() {
-  local src="$1" dst="$2" key line val tmp
-  line="$(grep -m1 '^MAIL_TYPE=' "$src" || true)"
-  val="${line#*=}"; val="${val//[\'\"]/}"
-  [[ -n "$val" ]] || return 1
+  local src="$1" dst="$2" key raw
+  raw="$(dify_env_get "$src" MAIL_TYPE || true)"
+  [[ -n "${raw//[\'\"]/}" ]] || return 1
 
-  tmp="$(mktemp)"
   for key in "${DIFY_MAIL_KEYS[@]}"; do
-    line="$(grep -m1 "^${key}=" "$src" || true)"
-    val="${line#*=}"; val="${val//[\'\"]/}"
-    [[ -n "$val" ]] || continue
-    grep -v "^${key}=" "$dst" > "$tmp" || true
-    printf '%s\n' "$line" >> "$tmp"
-    cat "$tmp" > "$dst"   # cat で書き戻し = dst の権限 (chmod 600) を保持
+    raw="$(dify_env_get "$src" "$key" || true)"
+    [[ -n "${raw//[\'\"]/}" ]] || continue
+    dify_env_upsert "$dst" "$key" "$raw"
   done
-  rm -f "$tmp"
 }

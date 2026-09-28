@@ -202,37 +202,53 @@ curl -I https://<SUB>.<GATEWAY_DOMAIN>/
 
 ## バージョンアップ
 
-> ⚠️ **必ず事前にバックアップを取ってから実施すること**(「バックアップとリストア」の手順書)。
-> アップグレード時にDBマイグレーションが走るため、失敗すると手戻りが大きい。
+`scripts/dify-upgrade.sh` がインスタンス単位で次を行う: 更新前のバックアップ (「バックアップとリストア」の
+手順書と同じ形式) → `.env` の更新 (新バージョンで追加された設定・鍵の補完) → テンプレートの反映 →
+新バージョンでの起動と起動完了の確認。LiteLLM/Gatewayのバージョンアップは別の手順書
+(「バージョンアップ(LiteLLM・Gateway)」)を参照。
 
-Difyは`dify/docker/`(テンプレート)を複製して各インスタンスを作る方式のため、**新しい
-テンプレートを取得したうえで、インスタンスごとに個別ファイルだけ更新**する。
-LiteLLM/Gatewayのバージョンアップは別の手順書(「バージョンアップ(LiteLLM・Gateway)」)を参照。
+> ⚠️ 更新時にDBマイグレーションが走り、元のバージョンには戻せない (戻す場合はバックアップからのリストア)。
+> インスタンスは**起動したまま**実行すること (バックアップ取得のため)。バックアップにはアップロード
+> ファイル等も含むため、`<BACKUP_DIR>` の空き容量を事前に確認しておく。
+
+### ① [Dify VM] 準備 (初回のみ確認)
 
 ```bash
 ssh <DIFY_HOST>
 cd <REPO_DIR>
 git pull   # ベンダーが更新したテンプレート(dify/docker/)を取得
+grep '^BACKUP_DIR=' .env
 ```
 
-以降を **インスタンスごとに1つずつ**実施 (複数ある場合、1つ確認できてから次に進む):
+`BACKUP_DIR=` が表示されない、または値が空なら、`.env` の末尾に `BACKUP_DIR=<BACKUP_DIR>` を追記する。
+
+以降の②〜④を **インスタンスごとに1つずつ**実施 (複数ある場合、1つ確認できてから次に進む)。
+
+### ② [Dify VM] 変更内容の確認 (何も変更しない)
 
 ```bash
-cd <REPO_DIR>/dify/instances/<TEAM>
-docker compose down
-
-# テンプレートの更新分を反映 (.env と volumes/ とアップロードしたデータは保持)
-rsync -a --exclude='.env' --exclude='volumes/' --exclude='docker-compose.override.yaml' \
-  <REPO_DIR>/dify/docker/ ./
-cp <REPO_DIR>/dify/compose.override.yaml ./docker-compose.override.yaml
-rsync -a <REPO_DIR>/dify/model-egress-guard/ ./model-egress-guard/
-
-docker compose pull
-docker compose up -d
-docker compose ps   # 全サービスが running/healthy か確認 (マイグレーションが動くため数分かかる場合あり)
+cd <REPO_DIR>
+bash scripts/dify-upgrade.sh <TEAM>
 ```
 
-### 確認
+表示の見方:
+
+- `Dify <現在> → <更新後>`: 意図したバージョンか確認する
+- `.env の変更` の `+` (追加) / `~` (変更): 通常はそのままでよい
+- `現在値を変更済みのため保持` / `新バージョンの .env.example に無いキー`: 値は保持される。
+  一覧を控えて次へ進んでよい (気になる場合はベンダーに確認)
+- `⚠ 機密キーがテンプレ既定値または空のまま` または `❌` が出た場合: **実行せず**ベンダーに連絡
+
+### ③ [Dify VM] 実行
+
+```bash
+bash scripts/dify-upgrade.sh <TEAM> --apply
+```
+
+最後に `✅ <TEAM> を Dify <バージョン> に更新しました。` と表示されればOK (数分〜十数分かかる)。
+`❌` で止まった場合は、表示されたバックアップファイル2つのパスを控えてベンダーに連絡する。
+
+### ④ 確認
 
 ```bash
 curl -I https://<TEAM>.<GATEWAY_DOMAIN>/
@@ -242,6 +258,10 @@ curl -I https://<TEAM>.<GATEWAY_DOMAIN>/
 
 ### トラブルシュート
 
-- Difyの起動後に動作がおかしい: `docker compose logs api` でマイグレーションエラーが出ていないか確認。
-  改善しない場合は上記「削除」①と同じ要領で、「バックアップとリストア」の手順書(①Dify VM)の
-  リストア手順でバックアップ時点に戻し、ベンダーに連絡する。
+- `db_postgres が起動していません`: `cd <REPO_DIR>/dify/instances/<TEAM> && docker compose up -d` で
+  起動してから③をやり直す。
+- ③が途中で止まった: 原因を解消して③と同じコマンドを再実行すると、続きから再開する
+  (バックアップは最初に取ったものを使い、取り直さない)。原因が分からない場合はベンダーに連絡。
+- 起動後に動作がおかしい: `docker compose logs api` でマイグレーションエラーが出ていないか確認。
+  改善しない場合は「バックアップとリストア」の手順書(①Dify VM)のリストア手順で、③で作成された
+  バックアップ (ファイル名に `pre-upgrade` を含む) に戻し、ベンダーに連絡する。
