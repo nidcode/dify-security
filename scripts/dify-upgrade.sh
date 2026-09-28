@@ -233,13 +233,15 @@ backup_invalid() {
 }
 BACKUP_DIR="$(root_env BACKUP_DIR)"
 [[ -z "$BACKUP_DIR" ]] || BACKUP_DIR="$(realpath -m "$BACKUP_DIR")"
-if (( RESUME )); then
+# 構成の確認は再開時も行う (中断後に DB_HOST 等が変わった場合や、この確認より前の版の
+# スクリプトが作った目印では、前回のバックアップが Dify の実際の DB ではない可能性があるため)
+if reason="$(backup_unsupported)"; then
+  echo "  ❌ $reason は未対応 (手順書03のバックアップは同梱 Postgres + Weaviate 前提)"
+elif (( RESUME )); then
   echo "  前回取得したものを使う (取り直さない)"
   echo "    DB:       $DB_BAK"
   echo "    ファイル: $FILES_BAK"
   if reason="$(backup_invalid)"; then echo "  ❌ 前回のバックアップが使えません: $reason"; fi
-elif reason="$(backup_unsupported)"; then
-  echo "  ❌ $reason は未対応 (手順書03のバックアップは同梱 Postgres + Weaviate 前提)"
 elif [[ -z "$BACKUP_DIR" ]]; then
   echo "  ❌ ルート .env の BACKUP_DIR が未設定 (--apply には必須)"
 else
@@ -257,6 +259,7 @@ fi
 # ここから --apply
 # =============================================================================
 echo ""
+if backup_unsupported >/dev/null; then exit 1; fi   # 新規・再開とも (理由は計画表示に出力済み)
 if (( RESUME )); then
   echo "==> 1/5 バックアップ (前回のものを使う)"
   # 切り戻せない状態で更新 (マイグレーション) を続けないよう、再開前に必ず検証する。
@@ -268,7 +271,6 @@ if (( RESUME )); then
   fi
 else
   [[ -n "$BACKUP_DIR" ]] || exit 1
-  if backup_unsupported >/dev/null; then exit 1; fi
   running="$(dc ps --status running --services)"
   grep -qx db_postgres <<< "$running" || {
     echo "❌ db_postgres が起動していません (バックアップに必要)。起動してから再実行: cd $DST && docker compose up -d"
