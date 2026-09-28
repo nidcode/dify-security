@@ -47,6 +47,9 @@ services:
       # PROXY protocol 用の実接続元IP設定。既定 (GATEWAY_TRUSTED_PROXY_IP 未設定) は空ディレクトリ
       # = nginx.conf の glob include が 0 件マッチするだけで何も変わらない。
       - ./gateway/nginx/realip:/etc/nginx/realip.d:ro
+      # アクセス/エラーログをホストに保存 (監査・トラブル対応。公式イメージは stdout への
+      # リンクだが、マウントで実ファイルになる)。ローテーションは gateway/logrotate/gateway-nginx。
+      - ./logs/gateway/nginx:/var/log/nginx
     environment:
       GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
       # GATEWAY_DOMAIN_SUFFIX / GATEWAY_AUTH_HOSTNAME / GATEWAY_PROXY_PROTOCOL は

@@ -31,6 +31,7 @@ services:
       - ./gateway/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./gateway/nginx/passthrough:/etc/nginx/templates:ro
       - ./gateway/nginx/realip:/etc/nginx/realip.d:ro
+      - ./logs/gateway/nginx:/var/log/nginx   # compose.gateway.yaml と同じ (!override のため再掲)
     environment:
       GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
       GATEWAY_DOMAIN_SUFFIX: ${GATEWAY_DOMAIN_SUFFIX}
