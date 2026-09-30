@@ -15,13 +15,14 @@ INSTANCES := $(notdir $(wildcard dify/instances/*))
 
 .DEFAULT_GOAL := help
 .PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test \
-        gateway-up gateway-down gateway-ps gateway-logs
+        gateway-up gateway-down gateway-ps gateway-logs gateway-stop gateway-rm gateway-pull \
+        gateway-reload gateway-db-dump gateway-db-restore gateway-psql
 
 help: ## このヘルプを表示
 	@echo "AIOP — Dify + LiteLLM"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Dify の起動/停止は各フォルダで素の docker compose:"
 	@echo "  cd dify/instances/<name> && docker compose up -d   /   down   /   logs -f"
@@ -65,10 +66,16 @@ pull: ## LiteLLM のイメージを最新に pull
 # scripts/lib/gateway.sh に一元化。ここは scripts/gateway-compose.sh 経由で呼ぶだけで、
 # モード別の案内や overlay の選択もそちらが行う (.env の GATEWAY_AUTH/GATEWAY_TLS)。
 GATEWAY := bash scripts/gateway-compose.sh
+# Keycloak 用 Postgres (サービス名 / 接続先ユーザー・DB)。compose.gateway.yaml の keycloak-db と対応。
+# コンテナ内のローカル接続は trust 認証のため、パスワード (.env の KEYCLOAK_DB_PASSWORD) は不要。
+KC_DB      := keycloak-db
+KC_DB_CONN := -U keycloak -d keycloak
+# サービス名が必須のターゲットで使う引数チェック
+REQUIRE_SVC = @test -n "$(SVC)" || { echo "❌ SVC= でサービス名を指定 (例: make $@ SVC=keycloak)"; exit 1; }
 
-gateway-up: ## Gateway を起動 (nginx + Keycloak + oauth2-proxy)
+gateway-up: ## Gateway を起動 (nginx + Keycloak + oauth2-proxy。SVC= で特定サービスのみ)
 	@test -f .env || { echo "❌ .env がありません。'make bootstrap' を実行"; exit 1; }
-	@$(GATEWAY) up -d
+	@$(GATEWAY) up -d $(SVC)
 
 gateway-down: ## Gateway を停止 (データは保持)
 	-@$(GATEWAY) down
@@ -77,8 +84,31 @@ gateway-down: ## Gateway を停止 (データは保持)
 gateway-ps: ## Gateway の状態
 	@$(GATEWAY) ps
 
-gateway-logs: ## Gateway のログを追従
-	@$(GATEWAY) logs -f --tail=100
+gateway-logs: ## Gateway のログを追従 (SVC= で特定サービスのみ)
+	@$(GATEWAY) logs -f --tail=100 $(SVC)
+
+gateway-stop: ## Gateway の指定サービスを停止 (make gateway-stop SVC=keycloak)
+	$(REQUIRE_SVC)
+	@$(GATEWAY) stop $(SVC)
+
+gateway-rm: ## Gateway の指定サービスを停止・削除 (make gateway-rm SVC=oauth2-proxy-teamA)
+	$(REQUIRE_SVC)
+	@$(GATEWAY) rm -sf $(SVC)
+
+gateway-pull: ## Gateway のイメージを pull
+	@$(GATEWAY) pull
+
+gateway-reload: ## front-nginx に設定・TLS証明書を無停止で再読込
+	@$(GATEWAY) exec front-nginx nginx -s reload
+
+gateway-db-dump: ## Keycloak DB を標準出力へダンプ (make -s gateway-db-dump | gzip > x.sql.gz)
+	@$(GATEWAY) exec -T $(KC_DB) pg_dump $(KC_DB_CONN) --clean --if-exists
+
+gateway-db-restore: ## 標準入力の SQL を Keycloak DB へ流し込む (gunzip -c x.sql.gz | make -s gateway-db-restore)
+	@$(GATEWAY) exec -T $(KC_DB) psql $(KC_DB_CONN)
+
+gateway-psql: ## Keycloak DB に psql で対話接続
+	@$(GATEWAY) exec $(KC_DB) psql $(KC_DB_CONN)
 
 urls: ## アクセスURL一覧
 	@echo "LiteLLM 管理UI : http://localhost:4000/ui   (bind ${LITELLM_HOST:-172.17.0.1} / LAN非公開)"

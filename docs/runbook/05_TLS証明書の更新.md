@@ -25,13 +25,11 @@ cp /tmp/privkey.pem   <REPO_DIR>/gateway/certs/tls.key
 
 ```bash
 cd <REPO_DIR>
-docker compose -p aiop-gateway --env-file .env \
-  -f compose.gateway.yaml -f gateway/oauth2-proxies.gateway.yaml \
-  exec front-nginx nginx -s reload
+make gateway-reload
 ```
 
 > ファイルを差し替えるだけでは反映されない (nginxは起動時に読み込んだ内容を保持し続ける)。
-> 必ず上記の `reload` を実行すること。
+> 必ず上記の `make gateway-reload` を実行すること。
 
 ## 確認
 
