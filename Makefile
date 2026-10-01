@@ -14,7 +14,7 @@ LITELLM := docker compose -p aiop-litellm --env-file .env -f compose.litellm.yam
 INSTANCES := $(notdir $(wildcard dify/instances/*))
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test \
+.PHONY: help bootstrap gen-env gen-env-force dify-new up down ps logs urls pull embed-test litellm-db-dump \
         gateway-up gateway-down gateway-ps gateway-logs gateway-stop gateway-rm gateway-pull \
         gateway-reload gateway-db-dump gateway-db-restore gateway-psql
 
@@ -60,6 +60,14 @@ logs: ## LiteLLM のログを追従
 
 pull: ## LiteLLM のイメージを最新に pull
 	-$(LITELLM) pull
+
+# LiteLLM 用 Postgres (サービス名 / 接続先ユーザー・DB)。compose.litellm.yaml の litellm-db と対応。
+# コンテナ内のローカル接続は trust 認証のため、パスワード (.env の LITELLM_DB_PASSWORD) は不要。
+LL_DB      := litellm-db
+LL_DB_CONN := -U litellm -d litellm
+
+litellm-db-dump: ## LiteLLM DB を標準出力へダンプ (make -s litellm-db-dump | gzip > x.sql.gz)
+	@$(LITELLM) exec -T $(LL_DB) pg_dump $(LL_DB_CONN) --clean --if-exists
 
 # --- Gateway スタック (front-nginx + Keycloak + oauth2-proxy) --------------
 # compose プロジェクト名 (aiop-gateway) / compose ファイル構成 / 動作モード判定は

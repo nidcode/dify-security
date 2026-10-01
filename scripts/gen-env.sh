@@ -60,7 +60,8 @@ declare -A carry=()
 if [[ -f .env && "$FORCE" == "--force" ]]; then
   for k in ANTHROPIC_API_KEY GATEWAY_DOMAIN GATEWAY_AUTH_HOSTNAME KEYCLOAK_GROUP_PREFIX \
            GATEWAY_AUTH GATEWAY_TLS GATEWAY_TRUSTED_PROXY_IP \
-           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET BACKUP_DIR "${DIFY_MAIL_KEYS[@]}"; do
+           ENTRA_TENANT_ID ENTRA_CLIENT_ID ENTRA_CLIENT_SECRET BACKUP_DIR BACKUP_KEEP BACKUP_KEEP_DIFY_FILES \
+           "${DIFY_MAIL_KEYS[@]}"; do
     line="$(grep -m1 "^${k}=" .env || true)"
     [[ -n "$line" ]] && carry["$k"]="${line#*=}"
   done
