@@ -131,9 +131,7 @@ curl -I https://<TEAM>.<GATEWAY_DOMAIN>/
 ```bash
 ssh <GATEWAY_HOST>
 cd <REPO_DIR>
-docker compose -p aiop-gateway --env-file .env \
-  -f compose.gateway.yaml -f gateway/oauth2-proxies.gateway.yaml \
-  rm -sf oauth2-proxy-<TEAM>
+make gateway-rm SVC=oauth2-proxy-<TEAM>
 ```
 
 次に `gateway/oauth2-proxies.gateway.yaml` をエディタで開き、`<TEAM>` のブロックを削除する

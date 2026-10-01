@@ -146,7 +146,7 @@ Dify を複数動かす公式的な方法は「**`docker/` フォルダを複製
 
 > **ログ**: 各サービスのログを複製先の `logs/<サービス>/` に保存する設定 (`docker-compose.logs.yaml`、
 > `.env` の `COMPOSE_FILE` で読み込み) も生成します。ローテーションと既存環境への適用は
-> [docs/runbook/11_ログの保存とローテーション.md](docs/runbook/11_ログの保存とローテーション.md) を参照。
+> [docs/runbook/10_ログの保存とローテーション.md](docs/runbook/10_ログの保存とローテーション.md) を参照。
 
 > **メール送信 (SMTP)**: ルート `.env` の `MAIL_TYPE` / `SMTP_*` (全インスタンス共通) が設定されていれば、
 > 複製先 `.env` へそのまま転記します (対象キーは `scripts/lib/dify-mail.sh` に集約)。
